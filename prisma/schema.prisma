@@ -1,0 +1,898 @@
+// =============================================================================
+//  Ambassadors Football — "Football. Faith. Future."
+//  PostgreSQL schema (Prisma 6.19+)
+//
+//  Isolation model, in one paragraph:
+//    Everything hangs off a Country. Intramurals (school intramurals and clubs)
+//    belong to exactly one Country. Admins and Coaches see an Intramural only
+//    when they are assigned to it (IntramuralAssignment) AND it is in their own
+//    Country, unless a Super Admin ticked canOverrideCountry. Parents see only
+//    Players linked to them through a *verified* ParentChild row, and only those
+//    Players' Intramurals. lib/security/rbac.ts turns these rules into Prisma
+//    `where` filters, so every query is scoped in the database, not just hidden
+//    in the UI.
+//
+//  Conventions:
+//    - Times of day are minutes after midnight (Int), local to the Country's
+//      time zone: 15:15 → 915. Shown with explicit AM/PM by lib/format.
+//    - Calendar dates are @db.Date. Instants are timestamptz.
+//    - Money is Decimal(12,2) in the Country's currency.
+//    - Names are stored Title Cased, emails lowercased, phones in E.164. All
+//      three are normalised in rbac.ts *before* writing, so the unique indexes
+//      below are what stop duplicate profiles.
+// =============================================================================
+
+generator client {
+  provider   = "prisma-client-js"
+  // Rust-free client (TypeScript query compiler + `pg` driver adapter):
+  // a far smaller memory footprint on free/low-memory cloud instances.
+  engineType = "client"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled connection (PgBouncer / Neon pooler / Supabase pooler), e.g.
+  // postgres://…/db?pgbouncer=true&connection_limit=1
+  url       = env("DATABASE_URL")
+  // Direct (unpooled) connection, used only by `prisma migrate`.
+  directUrl = env("DIRECT_URL")
+}
+
+// -----------------------------------------------------------------------------
+//  Enums
+// -----------------------------------------------------------------------------
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN // Admin / Coordinator, scoped to a country and assigned intramurals
+  COACH
+  PARENT
+}
+
+enum AccountStatus {
+  PENDING // parents waiting for an admin to verify their children
+  ACTIVE
+  SUSPENDED
+}
+
+enum IntramuralKind {
+  INTRAMURAL // school-based
+  CLUB
+}
+
+/// Task-specific powers an Admin can hand to one Coach in one Intramural.
+/// Deliberately excludes Setup and delete controls: those are never grantable.
+enum FieldPrivilegeType {
+  TAKE_ATTENDANCE
+  REGISTER_WALK_INS
+  EQUIPMENT_CHECK
+  GENERATE_REPORTS
+}
+
+enum PlayerSource {
+  APP
+  WALK_IN
+  AIRTABLE
+}
+
+enum SessionKind {
+  TRAINING
+  MATCH
+  TOURNAMENT
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  EXCUSED
+}
+
+enum Virtue {
+  TEMPERANCE
+  WISDOM
+  FORTITUDE
+  JUSTICE
+  TEAMWORK
+  DISCIPLINE
+}
+
+enum TallyKind {
+  MATCH_SCORE // small-sided match result
+  SPORTSMANSHIP
+  VIRTUE_POINTS // team (house) points
+}
+
+enum WelfareSeverity {
+  OBSERVATION // welfare note only; never sent to parents automatically
+  KNOCK
+  MINOR_INJURY
+  MODERATE_INJURY
+  SERIOUS_INJURY
+}
+
+enum EquipmentPhase {
+  PRE_SESSION
+  POST_SESSION
+}
+
+enum EquipmentCondition {
+  GOOD
+  DAMAGED
+  MISSING
+}
+
+enum FeeKind {
+  SUBSCRIPTION
+  TOURNAMENT
+  KIT
+  OTHER
+}
+
+enum PaymentMethod {
+  MPESA
+  CASH
+  BANK
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum NotificationKind {
+  WELFARE
+  PAYMENT
+  SCHEDULE
+  AWARD
+  APPROVAL
+  PRIVILEGES
+  GENERAL
+}
+
+enum SyncOpType {
+  ATTENDANCE
+  WALK_IN
+  MATCH_EVENT
+  EQUIPMENT_CHECK
+  MENTORSHIP_LOG
+  WELFARE_REPORT
+  VIRTUE_SCORE
+  AVAILABILITY
+}
+
+enum SyncOpStatus {
+  APPLIED
+  REJECTED
+}
+
+enum AirtableOutboxStatus {
+  QUEUED
+  DONE
+  FAILED
+}
+
+// -----------------------------------------------------------------------------
+//  Geography & organisation
+// -----------------------------------------------------------------------------
+
+model Country {
+  id           Int      @id @default(autoincrement())
+  /// ISO 3166-1 alpha-2, e.g. "KE"
+  code         String   @unique @db.Char(2)
+  name         String
+  /// ISO 4217, e.g. "KES", "USD"
+  currency     String   @default("KES") @db.Char(3)
+  /// IANA zone, e.g. "Africa/Nairobi"; drives "today" and session times
+  timeZone     String   @default("Africa/Nairobi")
+  /// Used to turn local numbers (0712…) into E.164 (+254712…)
+  phonePrefix  String   @default("+254")
+  /// M-PESA STK Push offered to parents in this country
+  mpesaEnabled Boolean  @default(false)
+  /// Open for onboarding (country picker)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  users       User[]
+  intramurals Intramural[]
+
+  @@map("countries")
+}
+
+model Intramural {
+  id              Int            @id @default(autoincrement())
+  countryId       Int
+  slug            String         @unique
+  name            String
+  shortCode       String
+  kind            IntramuralKind @default(INTRAMURAL)
+  color           String         @default("#0F1E3D")
+  logoPath        String?
+  coordinatorName String?
+
+  /// Regular session day: 0 = Sunday … 6 = Saturday. The UI label
+  /// ("Tuesday Session", "Saturday Session") is always derived from this.
+  sessionWeekday  Int    @default(2) @db.SmallInt
+  /// Minutes after midnight, local time (915 = 3:15 PM)
+  sessionStartMin Int    @default(915) @db.SmallInt
+  sessionEndMin   Int    @default(1010) @db.SmallInt
+  location        String @default("")
+  dressCode       String @default("")
+
+  /// [{ id, label, tone: "good" | "ok" | "bad" }]
+  availabilityOptions Json @default("[{\"id\":\"yes\",\"label\":\"I will be there\",\"tone\":\"good\"},{\"id\":\"late\",\"label\":\"I will be late\",\"tone\":\"ok\"},{\"id\":\"absent\",\"label\":\"I will not be able to attend\",\"tone\":\"bad\"}]")
+  /// ["Setup & Equipment", "Player Check-in", …]
+  defaultRoles        Json @default("[]")
+  /// [{ startMin, activity }]
+  defaultSchedule     Json @default("[]")
+  /// Virtue houses: [{ id, name, color }]
+  teams               Json @default("[]")
+  /// Age groups: ["Under 9", "Under 11", …]
+  categories          Json @default("[]")
+
+  archived  Boolean  @default(false)
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  country         Country                @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  assignments     IntramuralAssignment[]
+  fieldPrivileges FieldPrivilege[]
+  airtable        AirtableConfig?
+  players         Player[]
+  sessions        Session[]
+  mentorshipLogs  MentorshipLog[]
+  tallyEvents     TallyEvent[]
+  awards          CharacterAward[]
+  equipmentItems  EquipmentItem[]
+
+  @@index([countryId])
+  @@map("intramurals")
+}
+
+// -----------------------------------------------------------------------------
+//  People, roles & permissions
+// -----------------------------------------------------------------------------
+
+model User {
+  id                 Int           @id @default(autoincrement())
+  /// Always lowercased + trimmed before write (normalizeEmail) → unique per person
+  email              String        @unique
+  /// E.164 (+254712345678), normalised with the user's country prefix → unique
+  phone              String?       @unique
+  /// Title Cased on input and again before write (titleCaseName)
+  name               String
+  passwordHash       String
+  role               Role          @default(COACH)
+  status             AccountStatus @default(ACTIVE)
+  countryId          Int
+  mustChangePassword Boolean       @default(false)
+  /// Bumped on role change, password change, "sign out everywhere":
+  /// every older session token stops working immediately.
+  tokenVersion       Int           @default(1)
+  lastSeenAt         DateTime?     @db.Timestamptz
+  createdAt          DateTime      @default(now()) @db.Timestamptz
+  updatedAt          DateTime      @updatedAt @db.Timestamptz
+
+  country           Country                @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  adminPermissions  AdminPermissions?
+  assignments       IntramuralAssignment[]
+  fieldPrivileges   FieldPrivilege[]       @relation("PrivilegeHolder")
+  privilegesGranted FieldPrivilege[]       @relation("PrivilegeGrantor")
+  children          ParentChild[]          @relation("ParentLinks")
+  verifiedLinks     ParentChild[]          @relation("ParentLinkVerifier")
+  availability      Availability[]
+  notifications     Notification[]
+  consents          PolicyConsent[]
+  syncOperations    SyncOperation[]
+  payments          Payment[]              @relation("Payer")
+
+  // Authored records keep their history if the author deletes their account
+  // (foreign keys become NULL; no personal data of the author remains).
+  playersCreated     Player[]         @relation("PlayerCreatedBy")
+  sessionsUpdated    Session[]        @relation("SessionUpdatedBy")
+  attendanceRecorded Attendance[]
+  feedbackGiven      CoachFeedback[]
+  virtueScores       VirtueScore[]
+  mentorshipLogs     MentorshipLog[]
+  tallyEvents        TallyEvent[]
+  awardsGiven        CharacterAward[]
+  welfareReports     WelfareReport[]
+  equipmentChecks    EquipmentCheck[]
+  feesCreated        FeeItem[]
+  paymentsRecorded   Payment[]        @relation("PaymentRecordedBy")
+  airtableUpdates    AirtableConfig[]
+  auditEntries       AuditLog[]
+
+  @@index([countryId, role])
+  @@map("users")
+}
+
+/// The Super Admin's checkboxes for one Admin. One row per Admin; absent row =
+/// no admin powers. Super Admins bypass these; Coaches and Parents never get a row
+/// (a Coach's extra powers are FieldPrivileges instead).
+model AdminPermissions {
+  userId                  Int      @id
+  canEditSchedules        Boolean  @default(true) // sessions, fixtures, Setup tab
+  canRegisterPlayers      Boolean  @default(true)
+  canAssignCoachRoles     Boolean  @default(true) // add/remove coaches, session roles
+  canManageAirtable       Boolean  @default(true)
+  canApproveParents       Boolean  @default(true)
+  canOverrideCountry      Boolean  @default(false) // work in assigned intramurals abroad
+  canManagePayments       Boolean  @default(true) // fees, cash/bank entries
+  canGenerateReports      Boolean  @default(true) // matchday PDF
+  canGrantFieldPrivileges Boolean  @default(true)
+  updatedById             Int?
+  updatedAt               DateTime @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("admin_permissions")
+}
+
+/// Which intramurals an Admin or Coach works in. (Parents are linked through
+/// their children instead.)
+model IntramuralAssignment {
+  userId       Int
+  intramuralId Int
+  assignedById Int?
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  intramural Intramural @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+
+  @@id([userId, intramuralId])
+  @@index([intramuralId])
+  @@map("intramural_assignments")
+}
+
+/// "Take attendance at Rafiki until Friday": one privilege, one coach, one
+/// intramural, optional expiry. Granted by an Admin who holds the matching power.
+model FieldPrivilege {
+  id           Int                @id @default(autoincrement())
+  userId       Int
+  intramuralId Int
+  privilege    FieldPrivilegeType
+  grantedById  Int?
+  expiresAt    DateTime?          @db.Timestamptz
+  createdAt    DateTime           @default(now()) @db.Timestamptz
+
+  user       User       @relation("PrivilegeHolder", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy  User?      @relation("PrivilegeGrantor", fields: [grantedById], references: [id], onDelete: SetNull)
+  intramural Intramural @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, intramuralId, privilege])
+  @@index([intramuralId])
+  @@map("field_privileges")
+}
+
+/// Per-intramural Airtable link. The API token is stored encrypted
+/// (AES-256-GCM, key in AIRTABLE_ENCRYPTION_KEY) and is never sent to a browser.
+model AirtableConfig {
+  intramuralId      Int      @id
+  /// Public registration / sibling-registration form
+  formUrl           String?
+  baseId            String?
+  tableName         String?
+  viewName          String?
+  /// base64(iv | authTag | ciphertext); null = not set
+  apiTokenEncrypted String?
+  /// Field names in the base: { name, firstName, lastName, category, guardianName, guardianEmail, guardianPhone, dateOfBirth }
+  fieldMap          Json     @default("{\"name\":\"Name\",\"category\":\"Category\",\"guardianName\":\"Parent Name\",\"guardianEmail\":\"Parent Email\",\"guardianPhone\":\"Parent Phone\",\"dateOfBirth\":\"Date of Birth\"}")
+  /// Also create Airtable records for walk-ins registered on the pitch
+  pushWalkIns       Boolean  @default(false)
+  updatedById       Int?
+  updatedAt         DateTime @updatedAt @db.Timestamptz
+
+  intramural Intramural @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+  updatedBy  User?      @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("airtable_configs")
+}
+
+// -----------------------------------------------------------------------------
+//  Players (minors) & their parents
+// -----------------------------------------------------------------------------
+
+/// A child athlete. Children never have accounts. Minimal data, visible only to
+/// the child's verified parents and the staff of the child's intramural.
+model Player {
+  id                    Int          @id @default(autoincrement())
+  intramuralId          Int
+  firstName             String // Title Cased
+  lastName              String       @default("") // Title Cased
+  /// lower(first)|lower(last)|dob, built by playerDedupeKey(): the same child
+  /// can't be registered twice in one intramural (Prisma has no lower() index).
+  dedupeKey             String
+  dateOfBirth           DateTime?    @db.Date
+  category              String       @default("")
+  team                  String       @default("")
+  guardianName          String       @default("")
+  guardianEmail         String? // lowercased
+  guardianPhone         String? // E.164
+  medicalNotes          String       @default("")
+  /// When and how the parent/guardian consented to the programme holding this
+  /// child's data (Airtable form, paper form, in-app). Play youth-data compliance.
+  guardianConsentAt     DateTime?    @db.Timestamptz
+  guardianConsentSource String?
+  /// Photos in reports/social posts only with explicit consent
+  mediaConsent          Boolean      @default(false)
+  source                PlayerSource @default(APP)
+  airtableRecordId      String?
+  active                Boolean      @default(true)
+  /// When an inactive player's record should be erased (retention policy)
+  retainUntil           DateTime?    @db.Date
+  createdById           Int?
+  createdAt             DateTime     @default(now()) @db.Timestamptz
+  updatedAt             DateTime     @updatedAt @db.Timestamptz
+
+  intramural     Intramural       @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+  createdBy      User?            @relation("PlayerCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  parents        ParentChild[]
+  attendance     Attendance[]
+  feedback       CoachFeedback[]
+  virtueScores   VirtueScore[]
+  mentorshipLogs MentorshipLog[]
+  awards         CharacterAward[]
+  welfareReports WelfareReport[]
+  fees           FeeItem[]
+  payments       Payment[]
+  airtableOutbox AirtableOutbox[]
+
+  @@unique([intramuralId, dedupeKey])
+  @@unique([intramuralId, airtableRecordId])
+  @@index([guardianEmail])
+  @@index([guardianPhone])
+  @@map("players")
+}
+
+/// Parent ↔ child link. Created unverified when emails/phones match; a parent
+/// sees the child only once an Admin with canApproveParents sets verifiedAt.
+model ParentChild {
+  parentId     Int
+  playerId     Int
+  verifiedById Int?
+  verifiedAt   DateTime? @db.Timestamptz
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+
+  parent     User   @relation("ParentLinks", fields: [parentId], references: [id], onDelete: Cascade)
+  player     Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  verifiedBy User?  @relation("ParentLinkVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+
+  @@id([parentId, playerId])
+  @@index([playerId])
+  @@map("parent_children")
+}
+
+// -----------------------------------------------------------------------------
+//  Sessions, attendance & polls
+// -----------------------------------------------------------------------------
+
+model Session {
+  id           Int         @id @default(autoincrement())
+  intramuralId Int
+  date         DateTime    @db.Date
+  kind         SessionKind @default(TRAINING)
+  /// "<intramuralId>:<YYYY-MM-DD>" for TRAINING, null otherwise: at most one
+  /// regular training per intramural per day (a partial unique index, Prisma-style).
+  trainingKey  String?     @unique
+  title        String      @default("")
+  startMin     Int         @db.SmallInt
+  endMin       Int         @db.SmallInt
+  location     String      @default("")
+  dressCode    String      @default("")
+  opponent     String      @default("")
+  travelNotes  String      @default("")
+  /// [{ startMin, activity }]
+  schedule     Json        @default("[]")
+  /// [{ role, userId | null }]
+  roles        Json        @default("[]")
+  cancelled    Boolean     @default(false)
+  /// Optimistic locking: an edit must quote the version it started from
+  version      Int         @default(1)
+  updatedById  Int?
+  updatedAt    DateTime    @updatedAt @db.Timestamptz
+
+  intramural      Intramural       @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+  updatedBy       User?            @relation("SessionUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  availability    Availability[]
+  attendance      Attendance[]
+  feedback        CoachFeedback[]
+  virtueScores    VirtueScore[]
+  mentorshipLogs  MentorshipLog[]
+  tallyEvents     TallyEvent[]
+  awards          CharacterAward[]
+  welfareReports  WelfareReport[]
+  equipmentChecks EquipmentCheck[]
+
+  @@index([intramuralId, date])
+  @@map("sessions")
+}
+
+/// Coach availability poll answer.
+model Availability {
+  sessionId Int
+  userId    Int
+  optionId  String
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, userId])
+  @@map("availability")
+}
+
+model Attendance {
+  sessionId    Int
+  playerId     Int
+  status       AttendanceStatus
+  checkedInAt  DateTime?        @db.Timestamptz
+  recordedById Int?
+  /// When the coach tapped it on the phone (may be hours before it synced).
+  /// A sync only overwrites an older tap: the newest tap always wins.
+  recordedAt   DateTime         @db.Timestamptz
+
+  session    Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  player     Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  recordedBy User?   @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@id([sessionId, playerId])
+  @@index([playerId])
+  @@map("attendance")
+}
+
+// -----------------------------------------------------------------------------
+//  Character, mentorship, tally & welfare
+// -----------------------------------------------------------------------------
+
+/// Coach feedback a parent can read (category: Technical, Teamwork, Attitude…).
+model CoachFeedback {
+  id              Int      @id @default(autoincrement())
+  playerId        Int
+  sessionId       Int?
+  category        String
+  rating          Int?     @db.SmallInt // 1–5
+  note            String   @default("")
+  visibleToParent Boolean  @default(true)
+  coachId         Int?
+  createdAt       DateTime @default(now()) @db.Timestamptz
+
+  player  Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  session Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  coach   User?    @relation(fields: [coachId], references: [id], onDelete: SetNull)
+
+  @@index([playerId, createdAt(sort: Desc)])
+  @@map("coach_feedback")
+}
+
+/// One virtue score (1–10) from one session: the parent radar chart averages these.
+model VirtueScore {
+  id           Int      @id @default(autoincrement())
+  playerId     Int
+  sessionId    Int?
+  virtue       Virtue
+  score        Int      @db.SmallInt // 1–10
+  season       String // "2026"
+  recordedById Int?
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  session    Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  recordedBy User?    @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([playerId, season])
+  @@map("virtue_scores")
+}
+
+/// Post-practice reflection. STAFF ONLY: never selected in any parent query.
+model MentorshipLog {
+  id                 Int      @id @default(autoincrement())
+  intramuralId       Int
+  sessionId          Int?
+  /// null = about the whole group
+  playerId           Int?
+  coachId            Int?
+  discussionNotes    String   @default("")
+  scripture          String   @default("")
+  scriptureMilestone String   @default("")
+  prayerPoints       String   @default("")
+  createdAt          DateTime @default(now()) @db.Timestamptz
+
+  intramural Intramural @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+  session    Session?   @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  player     Player?    @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  coach      User?      @relation(fields: [coachId], references: [id], onDelete: SetNull)
+
+  @@index([intramuralId, createdAt(sort: Desc)])
+  @@map("mentorship_logs")
+}
+
+/// Match scores, sportsmanship points and house (virtue team) points.
+model TallyEvent {
+  id             Int       @id @default(autoincrement())
+  intramuralId   Int
+  sessionId      Int?
+  kind           TallyKind
+  /// Home side for a match; team id for points
+  team           String    @default("")
+  opponent       String    @default("")
+  points         Int       @default(0) @db.SmallInt
+  opponentPoints Int       @default(0) @db.SmallInt
+  category       String    @default("")
+  note           String    @default("")
+  recordedById   Int?
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+
+  intramural Intramural @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+  session    Session?   @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  recordedBy User?      @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([intramuralId, createdAt(sort: Desc)])
+  @@index([sessionId])
+  @@map("tally_events")
+}
+
+/// Weekly character awardee (parents are notified).
+model CharacterAward {
+  id           Int      @id @default(autoincrement())
+  intramuralId Int
+  playerId     Int
+  sessionId    Int?
+  /// Monday of the award week
+  weekOf       DateTime @db.Date
+  award        String // "Fortitude Award"
+  virtue       Virtue?
+  reason       String   @default("")
+  awardedById  Int?
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  intramural Intramural @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+  player     Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  session    Session?   @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  awardedBy  User?      @relation(fields: [awardedById], references: [id], onDelete: SetNull)
+
+  @@index([intramuralId, weekOf])
+  @@index([playerId])
+  @@map("character_awards")
+}
+
+/// Individual welfare observation or physical incident. Anything above
+/// OBSERVATION notifies the child's verified parents immediately (parentNotifiedAt);
+/// the parent confirms they have seen it (parentAcknowledgedAt).
+model WelfareReport {
+  id                   Int             @id @default(autoincrement())
+  playerId             Int
+  sessionId            Int?
+  severity             WelfareSeverity
+  bodyPart             String          @default("")
+  description          String
+  actionTaken          String          @default("")
+  reportedById         Int?
+  parentNotifiedAt     DateTime?       @db.Timestamptz
+  parentAcknowledgedAt DateTime?       @db.Timestamptz
+  createdAt            DateTime        @default(now()) @db.Timestamptz
+
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  session    Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  reportedBy User?    @relation(fields: [reportedById], references: [id], onDelete: SetNull)
+
+  @@index([playerId, createdAt(sort: Desc)])
+  @@map("welfare_reports")
+}
+
+// -----------------------------------------------------------------------------
+//  Equipment
+// -----------------------------------------------------------------------------
+
+model EquipmentItem {
+  id           Int     @id @default(autoincrement())
+  intramuralId Int
+  name         String // Footballs, Cones, Bibs, Kits, First-aid kit…
+  expected     Int     @default(1)
+  active       Boolean @default(true)
+
+  intramural Intramural           @relation(fields: [intramuralId], references: [id], onDelete: Cascade)
+  lines      EquipmentCheckLine[]
+
+  @@index([intramuralId])
+  @@map("equipment_items")
+}
+
+/// One pre- or post-session count. Re-saving the same phase replaces it.
+model EquipmentCheck {
+  id           Int            @id @default(autoincrement())
+  sessionId    Int
+  phase        EquipmentPhase
+  notes        String         @default("")
+  recordedById Int?
+  recordedAt   DateTime       @db.Timestamptz
+
+  session    Session              @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  recordedBy User?                @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+  lines      EquipmentCheckLine[]
+
+  @@unique([sessionId, phase])
+  @@map("equipment_checks")
+}
+
+model EquipmentCheckLine {
+  checkId   Int
+  itemId    Int
+  /// Copy of the item's expected count at the time (the list can change later)
+  expected  Int
+  counted   Int
+  condition EquipmentCondition @default(GOOD)
+
+  check EquipmentCheck @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  item  EquipmentItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([checkId, itemId])
+  @@map("equipment_check_lines")
+}
+
+// -----------------------------------------------------------------------------
+//  Fees & M-PESA
+// -----------------------------------------------------------------------------
+
+/// A charge on a child's account (term subscription, tournament, kit…).
+model FeeItem {
+  id          Int       @id @default(autoincrement())
+  playerId    Int
+  kind        FeeKind   @default(SUBSCRIPTION)
+  title       String
+  amount      Decimal   @db.Decimal(12, 2)
+  currency    String    @db.Char(3)
+  dueDate     DateTime? @db.Date
+  createdById Int?
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+
+  player    Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  payments  Payment[]
+
+  @@index([playerId])
+  @@map("fee_items")
+}
+
+/// M-PESA STK Push (or a cash/bank entry). The Daraja callback finds the row by
+/// checkoutRequestId; only a PENDING row ever changes, so retried callbacks are
+/// harmless. Payment records survive account deletion with PII removed
+/// (payerId → null, phone → null) because accounts must be kept.
+model Payment {
+  id                Int           @id @default(autoincrement())
+  playerId          Int
+  feeItemId         Int?
+  payerId           Int?
+  method            PaymentMethod @default(MPESA)
+  amount            Decimal       @db.Decimal(12, 2)
+  currency          String        @db.Char(3)
+  /// 2547XXXXXXXX as sent to Daraja; erased on account deletion
+  phone             String?
+  status            PaymentStatus @default(PENDING)
+  merchantRequestId String?
+  checkoutRequestId String?       @unique
+  mpesaReceipt      String?       @unique
+  resultCode        Int?
+  resultDesc        String        @default("")
+  /// Raw callback body, for reconciliation
+  rawCallback       Json?
+  recordedById      Int? // staff member for cash/bank entries
+  createdAt         DateTime      @default(now()) @db.Timestamptz
+  completedAt       DateTime?     @db.Timestamptz
+
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Restrict)
+  feeItem    FeeItem? @relation(fields: [feeItemId], references: [id], onDelete: SetNull)
+  payer      User?    @relation("Payer", fields: [payerId], references: [id], onDelete: SetNull)
+  recordedBy User?    @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([playerId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+// -----------------------------------------------------------------------------
+//  Offline sync, Airtable, notifications
+// -----------------------------------------------------------------------------
+
+/// Idempotency ledger for the offline queue. The phone gives every queued action
+/// a UUID; the server records it here in the same transaction as the change.
+/// A re-sent action (flaky signal, Background Sync retry) finds its row and gets
+/// the stored result back instead of being applied twice.
+model SyncOperation {
+  /// Client-generated UUID (Dexie outbox key)
+  id         String       @id @db.Uuid
+  userId     Int
+  type       SyncOpType
+  status     SyncOpStatus
+  /// What the server answered (e.g. { playerId }), or the rejection reason
+  result     Json?
+  /// When the coach did it on the phone
+  clientAt   DateTime     @db.Timestamptz
+  receivedAt DateTime     @default(now()) @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, receivedAt])
+  @@map("sync_operations")
+}
+
+/// Walk-ins waiting to be written to their intramural's Airtable base (retried
+/// with back-off; the phone never talks to Airtable directly).
+model AirtableOutbox {
+  id        Int                  @id @default(autoincrement())
+  playerId  Int
+  status    AirtableOutboxStatus @default(QUEUED)
+  attempts  Int                  @default(0)
+  lastError String               @default("")
+  nextTryAt DateTime             @default(now()) @db.Timestamptz
+  doneAt    DateTime?            @db.Timestamptz
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextTryAt])
+  @@map("airtable_outbox")
+}
+
+model Notification {
+  id        Int              @id @default(autoincrement())
+  userId    Int
+  kind      NotificationKind
+  title     String
+  body      String           @default("")
+  link      String           @default("")
+  urgent    Boolean          @default(false)
+  readAt    DateTime?        @db.Timestamptz
+  createdAt DateTime         @default(now()) @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+// -----------------------------------------------------------------------------
+//  Play Store compliance & audit
+// -----------------------------------------------------------------------------
+
+/// Which privacy policy version each user accepted, and when.
+model PolicyConsent {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  policyVersion String // e.g. "2026-11-21"
+  acceptedAt    DateTime @default(now()) @db.Timestamptz
+  ipAddress     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("policy_consents")
+}
+
+/// Proof that a "Delete My Account" request was carried out, without keeping
+/// the person's details: only a salted SHA-256 of the email.
+model AccountDeletion {
+  id          Int      @id @default(autoincrement())
+  emailHash   String
+  role        Role
+  /// "in_app" | "web_request" | "admin"
+  channel     String
+  requestedAt DateTime @db.Timestamptz
+  completedAt DateTime @default(now()) @db.Timestamptz
+
+  @@map("account_deletions")
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  actorId   Int?
+  action    String // "permissions_set", "parent_approved", "user_promoted"…
+  detail    Json     @default("{}")
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_log")
+}
