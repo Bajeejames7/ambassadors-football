@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: ambassadors-football
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false # Postgres connection string (Neon, Render Postgres…)
+      - key: CREATOR_EMAIL
+        sync: false # whoever signs up with this email is a Super Admin
+      - key: TOKEN_SECRET
+        generateValue: true
+      - key: MPESA_MODE
+        value: mock # change to sandbox, then production
+      - key: MPESA_CONSUMER_KEY
+        sync: false
+      - key: MPESA_CONSUMER_SECRET
+        sync: false
+      - key: MPESA_SHORTCODE
+        value: "174379" # Daraja sandbox till; replace with your paybill/till for production
+      - key: MPESA_PASSKEY
+        sync: false
+      - key: MPESA_CALLBACK_SECRET
+        generateValue: true
+      - key: AIRTABLE_API_KEY
+        sync: false # optional fallback; each school can set its own token in Setup
+      - key: ANDROID_PACKAGE
+        sync: false # e.g. org.ambassadorsfootball.app (for the Play Store build)
+      - key: ANDROID_SHA256
+        sync: false # Play App Signing SHA-256 fingerprint

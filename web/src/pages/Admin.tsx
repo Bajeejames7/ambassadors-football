@@ -1,0 +1,445 @@
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, ExternalLink, UserMinus, UserPlus, X } from "lucide-react";
+import { api } from "../lib/api";
+import { type Intramural } from "../lib/queries";
+import { money, PERMISSION_LABELS, time12, WEEKDAYS } from "../lib/format";
+import { Empty, ErrorNote, Modal, Notice, SectionTitle, Spinner } from "../components/ui";
+import { ScheduleEditor } from "./Staff";
+
+const GRANTABLE = ["attendance.take", "players.register", "equipment.check", "reports.generate"];
+
+// ---- Setup -----------------------------------------------------------------------------------
+
+export function SetupTab({ i }: { i: Intramural }) {
+  const qc = useQueryClient();
+  const canEdit = i.myPermissions.includes("schedules.edit");
+  const [f, setF] = useState({
+    name: i.name, shortCode: i.shortCode, color: i.color, coordinatorName: i.coordinatorName, sessionWeekday: i.sessionWeekday,
+    sessionStart: i.sessionStart, sessionEnd: i.sessionEnd, location: i.location, dressCode: i.dressCode,
+  });
+  const [schedule, setSchedule] = useState(i.defaultSchedule);
+  const [roles, setRoles] = useState(i.defaultRoles.join("\n"));
+  const [categories, setCategories] = useState(i.categories.join("\n"));
+  const [msg, setMsg] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api(`/intramurals/${i.id}`, {
+        method: "PATCH",
+        body: { ...f, defaultSchedule: schedule.filter((r) => r.activity.trim()), defaultRoles: lines(roles), categories: lines(categories) },
+      });
+      setMsg({ tone: "good", text: `Saved. Upcoming sessions now show as "${WEEKDAYS[f.sessionWeekday]} Session".` });
+      void qc.invalidateQueries();
+    } catch (err) {
+      setMsg({ tone: "bad", text: (err as Error).message });
+    }
+  };
+  return (
+    <>
+      {canEdit && (
+        <form onSubmit={save} className="sheet grid gap-3">
+          <h2 className="condensed text-lg text-navy">Regular session</h2>
+          <div>
+            <span className="label">Session day</span>
+            <div className="grid grid-cols-7 gap-1" role="radiogroup" aria-label="Session day">
+              {WEEKDAYS.map((d, n) => (
+                <button type="button" role="radio" aria-checked={f.sessionWeekday === n} key={d} onClick={() => setF({ ...f, sessionWeekday: n })}
+                  className={`rounded-lg py-2 text-xs font-bold ring-1 ${f.sessionWeekday === n ? "bg-navy text-white ring-navy" : "ring-line"}`}>{d.slice(0, 3)}</button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label" htmlFor="ss">Players arrive</label><input id="ss" type="time" className="field" value={f.sessionStart} onChange={(e) => setF({ ...f, sessionStart: e.target.value })} /><p className="mt-1 text-xs text-slate">{time12(f.sessionStart)}</p></div>
+            <div><label className="label" htmlFor="se">Players leave</label><input id="se" type="time" className="field" value={f.sessionEnd} onChange={(e) => setF({ ...f, sessionEnd: e.target.value })} /><p className="mt-1 text-xs text-slate">{time12(f.sessionEnd)}</p></div>
+          </div>
+          <div><label className="label" htmlFor="sl">Pitch / location</label><input id="sl" className="field" value={f.location} onChange={(e) => setF({ ...f, location: e.target.value })} /></div>
+          <div><label className="label" htmlFor="sd">Kit / dress code</label><input id="sd" className="field" value={f.dressCode} onChange={(e) => setF({ ...f, dressCode: e.target.value })} /></div>
+          <ScheduleEditor value={schedule} onChange={setSchedule} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div><label className="label" htmlFor="sr">Coach roles (one per line)</label><textarea id="sr" className="field" rows={5} value={roles} onChange={(e) => setRoles(e.target.value)} /></div>
+            <div><label className="label" htmlFor="sc">Age groups (one per line)</label><textarea id="sc" className="field" rows={5} value={categories} onChange={(e) => setCategories(e.target.value)} /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label" htmlFor="sco">Coordinator</label><input id="sco" className="field" value={f.coordinatorName} onChange={(e) => setF({ ...f, coordinatorName: e.target.value })} /></div>
+            <div><label className="label" htmlFor="scl">Colour</label><input id="scl" type="color" className="field h-11 p-1" value={f.color} onChange={(e) => setF({ ...f, color: e.target.value })} /></div>
+          </div>
+          {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+          <button className="btn-primary justify-self-start">Save setup</button>
+        </form>
+      )}
+      {i.myPermissions.includes("airtable.manage") && <AirtableSetup i={i} />}
+      {canEdit && <EquipmentSetup i={i} />}
+    </>
+  );
+}
+
+const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+
+function AirtableSetup({ i }: { i: Intramural }) {
+  const qc = useQueryClient();
+  const a = i.airtable ?? {};
+  const [f, setF] = useState({ formUrl: a.formUrl ?? "", baseId: a.baseId ?? "", tableName: a.tableName ?? "", viewName: a.viewName ?? "", pushWalkIns: !!a.pushWalkIns, fieldMap: a.fieldMap ?? {} });
+  const [token, setToken] = useState("");
+  const [msg, setMsg] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  const fromLink = (url: string) => {
+    const m = url.match(/airtable\.com\/(app[A-Za-z0-9]{14})/);
+    setF({ ...f, formUrl: url, baseId: m && !f.baseId ? m[1] : f.baseId });
+  };
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api(`/intramurals/${i.id}/airtable`, { method: "PUT", body: { ...f, ...(token ? { apiToken: token } : {}) } });
+      setToken("");
+      setMsg({ tone: "good", text: "Airtable link saved." });
+      void qc.invalidateQueries({ queryKey: ["intramural", i.id] });
+    } catch (err) {
+      setMsg({ tone: "bad", text: (err as Error).message });
+    }
+  };
+  const FIELDS: [string, string][] = [["name", "Player full name"], ["firstName", "First name (if separate)"], ["lastName", "Last name (if separate)"], ["category", "Age group"], ["guardianName", "Parent name"], ["guardianEmail", "Parent email"], ["guardianPhone", "Parent phone"], ["dateOfBirth", "Date of birth"]];
+  return (
+    <form onSubmit={save} className="sheet mt-4 grid gap-3">
+      <h2 className="condensed text-lg text-navy">Airtable for {i.name}</h2>
+      <div>
+        <label className="label" htmlFor="af">Registration form link</label>
+        <input id="af" className="field" placeholder="https://airtable.com/app…/shr…" value={f.formUrl} onChange={(e) => fromLink(e.target.value)} />
+        <p className="mt-1 text-xs text-slate">Parents open this to register a child or a sibling.{f.formUrl && <> <a className="font-semibold text-brand" href={f.formUrl} target="_blank" rel="noreferrer">Test it <ExternalLink className="inline h-3 w-3" /></a></>}</p>
+      </div>
+      <p className="text-sm font-semibold text-navy">Instant player search (optional)</p>
+      <div className="grid grid-cols-2 gap-3">
+        <div><label className="label" htmlFor="ab">Base ID</label><input id="ab" className="field" placeholder="appXXXXXXXXXXXXXX" value={f.baseId} onChange={(e) => setF({ ...f, baseId: e.target.value.trim() })} /></div>
+        <div><label className="label" htmlFor="at">Table name</label><input id="at" className="field" placeholder="e.g. Registrations" value={f.tableName} onChange={(e) => setF({ ...f, tableName: e.target.value })} /></div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div><label className="label" htmlFor="av">View (optional)</label><input id="av" className="field" value={f.viewName} onChange={(e) => setF({ ...f, viewName: e.target.value })} /></div>
+        <div>
+          <label className="label" htmlFor="ak">Access token</label>
+          <input id="ak" className="field" type="password" autoComplete="off" placeholder={a.hasToken ? "Saved. Type to replace" : "pat…"} value={token} onChange={(e) => setToken(e.target.value)} />
+        </div>
+      </div>
+      <p className="text-xs text-slate">Create a personal access token in Airtable with the data.records:read scope (and data.records:write to send walk-ins), limited to this base. It is stored on the server and never sent to phones.</p>
+      <details>
+        <summary className="cursor-pointer text-sm font-semibold text-brand">Match your Airtable field names</summary>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {FIELDS.map(([k, label]) => (
+            <div key={k}><label className="label text-xs" htmlFor={`fm-${k}`}>{label}</label><input id={`fm-${k}`} className="field py-1.5 text-sm" value={f.fieldMap[k] ?? ""} onChange={(e) => setF({ ...f, fieldMap: { ...f.fieldMap, [k]: e.target.value } })} /></div>
+          ))}
+        </div>
+      </details>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.pushWalkIns} onChange={(e) => setF({ ...f, pushWalkIns: e.target.checked })} /> Also add walk-in players to this Airtable table</label>
+      {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+      <button className="btn-primary justify-self-start">Save Airtable link</button>
+    </form>
+  );
+}
+
+function EquipmentSetup({ i }: { i: Intramural }) {
+  const qc = useQueryClient();
+  const [items, setItems] = useState(i.equipment ?? []);
+  const [msg, setMsg] = useState("");
+  const save = async () => {
+    const saved = await api(`/intramurals/${i.id}/equipment`, { method: "PUT", body: { items: items.filter((x) => x.name.trim()) } });
+    setItems(saved);
+    setMsg("Equipment list saved.");
+    void qc.invalidateQueries({ queryKey: ["intramural", i.id] });
+  };
+  return (
+    <div className="sheet mt-4">
+      <h2 className="condensed text-lg text-navy">Equipment checklist</h2>
+      <p className="mt-1 text-sm text-slate">Counted before and after every session.</p>
+      <ul className="mt-3 grid gap-2">
+        {items.map((it, k) => (
+          <li key={it.id ?? `new-${k}`} className="flex items-center gap-2">
+            <input className="field" aria-label="Item" value={it.name} onChange={(e) => setItems(items.map((x, n) => (n === k ? { ...x, name: e.target.value } : x)))} />
+            <input className="field w-20" aria-label="How many" type="number" min={0} value={it.expected} onChange={(e) => setItems(items.map((x, n) => (n === k ? { ...x, expected: Number(e.target.value) } : x)))} />
+            <label className="flex items-center gap-1 text-xs text-slate"><input type="checkbox" checked={it.active} onChange={(e) => setItems(items.map((x, n) => (n === k ? { ...x, active: e.target.checked } : x)))} /> Used</label>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-3 flex gap-2">
+        <button className="btn-ghost" onClick={() => setItems([...items, { id: undefined as unknown as number, name: "", expected: 1, active: true }])}>Add item</button>
+        <button className="btn-primary" onClick={save}>Save list</button>
+      </div>
+      {msg && <Notice tone="good">{msg}</Notice>}
+    </div>
+  );
+}
+
+// ---- People ----------------------------------------------------------------------------------
+
+export function PeopleTab({ i }: { i: Intramural }) {
+  const p = i.myPermissions;
+  return (
+    <>
+      {p.includes("parents.approve") && <ParentApprovals i={i} />}
+      <Coaches i={i} />
+    </>
+  );
+}
+
+function Coaches({ i }: { i: Intramural }) {
+  const qc = useQueryClient();
+  const p = i.myPermissions;
+  const staff = useQuery({ queryKey: ["people", i.id], queryFn: () => api<any[]>(`/intramurals/${i.id}/people`) });
+  const available = useQuery({ queryKey: ["available", i.id], queryFn: () => api<any[]>(`/intramurals/${i.id}/available-coaches`), enabled: p.includes("roles.assign") });
+  const [editing, setEditing] = useState<any | null>(null);
+  const [addId, setAddId] = useState("");
+  const [msg, setMsg] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  const refresh = () => { void qc.invalidateQueries({ queryKey: ["people", i.id] }); void qc.invalidateQueries({ queryKey: ["available", i.id] }); };
+  const add = async () => {
+    try { await api(`/intramurals/${i.id}/coaches`, { method: "POST", body: { userId: Number(addId) } }); setAddId(""); refresh(); }
+    catch (err) { setMsg({ tone: "bad", text: (err as Error).message }); }
+  };
+  const remove = async (u: any) => {
+    if (!confirm(`Remove ${u.name} from ${i.name}?`)) return;
+    try { await api(`/intramurals/${i.id}/coaches/${u.id}`, { method: "DELETE" }); refresh(); }
+    catch (err) { setMsg({ tone: "bad", text: (err as Error).message }); }
+  };
+  if (staff.isLoading) return <Spinner />;
+  if (staff.error) return <ErrorNote error={staff.error} />;
+  return (
+    <>
+      <SectionTitle>Coaches and admins</SectionTitle>
+      {p.includes("roles.assign") && (available.data ?? []).length > 0 && (
+        <div className="mb-3 flex gap-2">
+          <select className="field" value={addId} onChange={(e) => setAddId(e.target.value)} aria-label="Coach to add">
+            <option value="">Add a coach from {i.countryName}…</option>
+            {available.data!.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
+          </select>
+          <button className="btn-primary" disabled={!addId} onClick={add}><UserPlus className="h-4 w-4" /> Add</button>
+        </div>
+      )}
+      {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+      <ul className="sheet divide-y divide-line py-1">
+        {staff.data!.map((u) => {
+          const field = u.grants.filter((g: any) => g.intramuralId === i.id && GRANTABLE.includes(g.permission));
+          return (
+            <li key={u.id} className="py-3">
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-navy">{u.name} <span className="text-sm font-normal text-slate">{u.role === "coach" ? "Coach" : u.role === "admin" ? "Admin" : "Super Admin"}</span></p>
+                  {u.email && <p className="truncate text-sm text-slate">{u.email}{u.phone ? ` · ${u.phone}` : ""}</p>}
+                </div>
+                {u.role === "coach" && p.includes("privileges.grant") && <button className="btn-ghost min-h-9" onClick={() => setEditing(u)}>Privileges</button>}
+                {u.role === "coach" && p.includes("roles.assign") && <button className="p-2 text-slate hover:text-bad" aria-label={`Remove ${u.name}`} onClick={() => remove(u)}><UserMinus className="h-4 w-4" /></button>}
+              </div>
+              {field.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {field.map((g: any) => <span key={g.permission} className="chip bg-brand/10 text-brand">{PERMISSION_LABELS[g.permission]}{g.expiresAt ? ` until ${new Date(g.expiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}</span>)}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {editing && <PrivilegeEditor i={i} user={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); refresh(); }} />}
+    </>
+  );
+}
+
+/** Task-specific field privileges for one coach (never Setup or delete controls). */
+function PrivilegeEditor({ i, user, onClose, onSaved }: { i: Intramural; user: any; onClose: () => void; onSaved: () => void }) {
+  const current = new Map<string, string | null>(user.grants.filter((g: any) => g.intramuralId === i.id).map((g: any) => [g.permission, g.expiresAt]));
+  const [chosen, setChosen] = useState<Record<string, { on: boolean; until: string }>>(
+    Object.fromEntries(GRANTABLE.map((p) => [p, { on: current.has(p), until: current.get(p)?.slice(0, 10) ?? "" }])),
+  );
+  const [error, setError] = useState("");
+  const save = async () => {
+    try {
+      await api(`/intramurals/${i.id}/coaches/${user.id}/privileges`, {
+        method: "PUT",
+        body: { privileges: Object.entries(chosen).filter(([, v]) => v.on).map(([permission, v]) => ({ permission, expiresAt: v.until ? new Date(`${v.until}T23:59:59+03:00`).toISOString() : null })) },
+      });
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  return (
+    <Modal open onClose={onClose} title={`${user.name}'s field privileges`}>
+      <p className="mb-3 text-sm text-slate">For {i.name} only. Leave the date empty to keep it until you remove it.</p>
+      <ul className="grid gap-2">
+        {GRANTABLE.filter((p) => i.myPermissions.includes(p)).map((p) => (
+          <li key={p} className="rounded-xl p-3 ring-1 ring-line">
+            <label className="flex items-center gap-2 font-semibold"><input type="checkbox" className="h-4 w-4" checked={chosen[p].on} onChange={(e) => setChosen({ ...chosen, [p]: { ...chosen[p], on: e.target.checked } })} />{PERMISSION_LABELS[p]}</label>
+            {chosen[p].on && (
+              <label className="mt-2 flex items-center gap-2 pl-6 text-sm text-slate">Until <input type="date" className="field w-auto py-1" value={chosen[p].until} onChange={(e) => setChosen({ ...chosen, [p]: { ...chosen[p], until: e.target.value } })} /></label>
+            )}
+          </li>
+        ))}
+      </ul>
+      {error && <Notice tone="bad">{error}</Notice>}
+      <button className="btn-primary mt-4 w-full" onClick={save}>Save privileges</button>
+    </Modal>
+  );
+}
+
+function ParentApprovals({ i }: { i: Intramural }) {
+  const qc = useQueryClient();
+  const requests = useQuery({ queryKey: ["parent-requests", i.id], queryFn: () => api<any[]>(`/intramurals/${i.id}/parent-requests`) });
+  const unlinked = useQuery({ queryKey: ["unlinked", i.id], queryFn: () => api<any[]>(`/intramurals/${i.id}/unlinked-parents`) });
+  const players = useQuery({ queryKey: ["players", i.id], queryFn: () => api<any[]>(`/intramurals/${i.id}/players`) });
+  const [linkFor, setLinkFor] = useState<any | null>(null);
+  const [pick, setPick] = useState<number[]>([]);
+  const refresh = () => { void qc.invalidateQueries({ queryKey: ["parent-requests", i.id] }); void qc.invalidateQueries({ queryKey: ["unlinked", i.id] }); };
+  const approve = async (parentId: number, playerIds: number[]) => {
+    await api("/parent-links/approve", { method: "POST", body: { parentId, playerIds } });
+    refresh();
+  };
+  const reject = async (parentId: number, playerId: number) => {
+    await api("/parent-links/remove", { method: "POST", body: { parentId, playerId } });
+    refresh();
+  };
+  const list = requests.data ?? [];
+  const loose = unlinked.data ?? [];
+  return (
+    <>
+      <SectionTitle>Parents waiting for approval</SectionTitle>
+      {list.length === 0 && loose.length === 0 ? <Empty>No parents waiting.</Empty> : (
+        <ul className="grid gap-2">
+          {list.map((r) => (
+            <li key={r.id} className="sheet">
+              <p className="font-bold text-navy">{r.name}</p>
+              <p className="text-sm text-slate">{r.email} · {r.phone}</p>
+              <ul className="mt-2 grid gap-1">
+                {r.children.filter((c: any) => !c.verified).map((c: any) => (
+                  <li key={c.playerId} className="flex items-center justify-between gap-2 rounded-xl bg-page px-3 py-2">
+                    <span className="text-[15px]"><span className="font-semibold">{c.name}</span><span className="block text-xs text-slate">Registered with {[c.guardianEmail, c.guardianPhone].filter(Boolean).join(" / ") || "no contact"}</span></span>
+                    <span className="flex gap-1">
+                      <button className="btn min-h-9 bg-good px-3 text-white" onClick={() => approve(r.id, [c.playerId])}><Check className="h-4 w-4" /> Confirm</button>
+                      <button className="btn-ghost min-h-9 px-3" aria-label="Not their child" onClick={() => reject(r.id, c.playerId)}><X className="h-4 w-4" /></button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+          {loose.map((r) => (
+            <li key={r.id} className="sheet flex items-center gap-3">
+              <div className="flex-1"><p className="font-bold text-navy">{r.name}</p><p className="text-sm text-slate">{r.email} · {r.phone} · no matching child found</p></div>
+              <button className="btn-ghost min-h-9" onClick={() => { setLinkFor(r); setPick([]); }}>Link a child</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {linkFor && (
+        <Modal open onClose={() => setLinkFor(null)} title={`Link ${linkFor.name}`}>
+          <p className="mb-2 text-sm text-slate">Only link children after checking with the parent.</p>
+          <ul className="max-h-80 overflow-y-auto">
+            {(players.data ?? []).map((p) => (
+              <li key={p.id}><label className="flex items-center gap-2 py-1.5"><input type="checkbox" checked={pick.includes(p.id)} onChange={(e) => setPick(e.target.checked ? [...pick, p.id] : pick.filter((x) => x !== p.id))} />{p.firstName} {p.lastName} <span className="text-xs text-slate">{p.guardianName}</span></label></li>
+            ))}
+          </ul>
+          <button className="btn-primary mt-3 w-full" disabled={!pick.length} onClick={async () => { await approve(linkFor.id, pick); setLinkFor(null); }}>Link and approve</button>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+// ---- Payments --------------------------------------------------------------------------------
+
+export function PaymentsTab({ i }: { i: Intramural }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["payments", i.id], queryFn: () => api<any>(`/intramurals/${i.id}/payments`) });
+  const [bulk, setBulk] = useState(false);
+  const [player, setPlayer] = useState<any | null>(null);
+  if (q.isLoading) return <Spinner />;
+  if (q.error) return <ErrorNote error={q.error} />;
+  const { balances, recent } = q.data;
+  const owed = balances.reduce((s: number, b: any) => s + Math.max(0, b.balance), 0);
+  const collected = recent.filter((r: any) => r.status === "completed").reduce((s: number, r: any) => s + Number(r.amount), 0);
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["payments", i.id] });
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="sheet"><p className="text-sm font-semibold text-slate">Outstanding</p><p className="display mt-1 text-[2rem] text-navy">{money(owed, i.currency)}</p></div>
+        <div className="sheet"><p className="text-sm font-semibold text-slate">Recently collected</p><p className="display mt-1 text-[2rem] text-good">{money(collected, i.currency)}</p></div>
+      </div>
+      <button className="btn-primary mt-3" onClick={() => setBulk(true)}>Charge everyone (term fee, tournament…)</button>
+      <SectionTitle>Balances</SectionTitle>
+      <ul className="sheet divide-y divide-line py-1">
+        {balances.map((b: any) => (
+          <li key={b.playerId}>
+            <button className="flex w-full items-center justify-between gap-3 py-2.5 text-left" onClick={() => setPlayer(b)}>
+              <span><span className="font-semibold">{b.name}</span> <span className="text-sm text-slate">{b.category}</span></span>
+              <span className={`font-bold ${b.balance > 0 ? "text-navy" : "text-good"}`}>{money(b.balance, i.currency)}</span>
+            </button>
+          </li>
+        ))}
+        {balances.length === 0 && <li className="py-3 text-slate">No players yet.</li>}
+      </ul>
+      <SectionTitle>Recent payments</SectionTitle>
+      <ul className="sheet divide-y divide-line py-1">
+        {recent.map((r: any) => (
+          <li key={r.id} className="flex items-center justify-between gap-3 py-2 text-[15px]">
+            <span>{r.playerName} <span className="text-xs text-slate">{r.method === "mpesa" ? `M-PESA ${r.receipt ?? ""}` : r.method}</span></span>
+            <span>{money(r.amount, i.currency)} <span className={`chip ${r.status === "completed" ? "bg-good/15 text-good" : r.status === "pending" ? "bg-warn/15 text-warn" : "bg-bad/10 text-bad"}`}>{r.status}</span></span>
+          </li>
+        ))}
+        {recent.length === 0 && <li className="py-3 text-slate">No payments yet.</li>}
+      </ul>
+      {bulk && <ChargeForm title="Charge every player" path={`/intramurals/${i.id}/fees`} categories={i.categories} onClose={() => setBulk(false)} onSaved={() => { setBulk(false); refresh(); }} />}
+      {player && <PlayerCharge i={i} player={player} onClose={() => setPlayer(null)} onSaved={() => { setPlayer(null); refresh(); }} />}
+    </>
+  );
+}
+
+function ChargeForm({ title, path, categories, onClose, onSaved, extra }: { title: string; path: string; categories?: string[]; onClose: () => void; onSaved: () => void; extra?: React.ReactNode }) {
+  const [f, setF] = useState({ kind: "subscription", title: "", amount: "", dueDate: "", category: "" });
+  const [error, setError] = useState("");
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api(path, { method: "POST", body: { kind: f.kind, title: f.title, amount: Number(f.amount), dueDate: f.dueDate || null, ...(f.category ? { category: f.category } : {}) } });
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  return (
+    <Modal open onClose={onClose} title={title}>
+      <form onSubmit={save} className="grid gap-3">
+        <select className="field" aria-label="Kind" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>
+          <option value="subscription">Subscription</option><option value="tournament">Tournament</option><option value="kit">Kit</option><option value="other">Other</option>
+        </select>
+        <div><label className="label" htmlFor="ct">What for</label><input id="ct" className="field" required placeholder="e.g. Term 1 2027 subscription" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label" htmlFor="ca">Amount</label><input id="ca" className="field" required inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /></div>
+          <div><label className="label" htmlFor="cd">Due</label><input id="cd" type="date" className="field" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} /></div>
+        </div>
+        {categories && <select className="field" aria-label="Only this age group" value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}><option value="">Every age group</option>{categories.map((c) => <option key={c}>{c}</option>)}</select>}
+        {error && <Notice tone="bad">{error}</Notice>}
+        <button className="btn-primary">Add charge and tell parents</button>
+      </form>
+      {extra}
+    </Modal>
+  );
+}
+
+function PlayerCharge({ i, player, onClose, onSaved }: { i: Intramural; player: any; onClose: () => void; onSaved: () => void }) {
+  const [mode, setMode] = useState<"charge" | "cash">("charge");
+  const [cash, setCash] = useState({ method: "cash", amount: "" });
+  const [error, setError] = useState("");
+  if (mode === "charge") {
+    return (
+      <ChargeForm title={`Charge ${player.name}`} path={`/players/${player.playerId}/fees`} onClose={onClose} onSaved={onSaved}
+        extra={<button className="btn-ghost mt-3 w-full" onClick={() => setMode("cash")}>Record a cash or bank payment instead</button>} />
+    );
+  }
+  return (
+    <Modal open onClose={onClose} title={`Payment from ${player.name}`}>
+      <form className="grid gap-3" onSubmit={async (e) => {
+        e.preventDefault();
+        try { await api(`/players/${player.playerId}/payments/manual`, { method: "POST", body: { method: cash.method, amount: Number(cash.amount) } }); onSaved(); }
+        catch (err) { setError((err as Error).message); }
+      }}>
+        <select className="field" aria-label="Method" value={cash.method} onChange={(e) => setCash({ ...cash, method: e.target.value })}><option value="cash">Cash</option><option value="bank">Bank transfer</option></select>
+        <div><label className="label" htmlFor="cm">Amount ({i.currency})</label><input id="cm" className="field" inputMode="decimal" required value={cash.amount} onChange={(e) => setCash({ ...cash, amount: e.target.value })} /></div>
+        {error && <Notice tone="bad">{error}</Notice>}
+        <button className="btn-primary">Record payment</button>
+      </form>
+    </Modal>
+  );
+}
