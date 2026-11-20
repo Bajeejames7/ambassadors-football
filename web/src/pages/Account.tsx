@@ -28,7 +28,7 @@ export function NotificationsPage() {
         <button className="btn-ghost" onClick={async () => { await api("/notifications/read", { method: "POST", body: {} }); void qc.invalidateQueries({ queryKey: ["notifications"] }); }}>Mark all read</button>
       )} />
       {list.length === 0 ? <Empty>No alerts yet. Injuries, payments, schedule changes and awards show up here.</Empty> : (
-        <ul className="grid gap-2">
+        <ul className="grid gap-3">
           {list.map((n) => {
             const Icon = ICON[n.kind] ?? Bell;
             return (

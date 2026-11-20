@@ -3,6 +3,7 @@ import { Bell, CalendarDays, ClipboardCheck, CloudOff, Home, RefreshCw, ShieldCh
 import { useAuth } from "../lib/auth";
 import { useOffline } from "../lib/offline";
 import { useNotifications } from "../lib/queries";
+import { Parent3D } from "./Parent3D";
 
 function navFor(role: string, isSuper: boolean) {
   if (role === "parent") {
@@ -64,7 +65,7 @@ export function Layout() {
         </header>
         <div className="hidden md:block"><SyncBar /></div>
         <main className="mx-auto max-w-3xl px-4 pb-32 pt-6 md:pb-12">
-          <Outlet />
+          {me!.role === "parent" ? <Parent3D><Outlet /></Parent3D> : <Outlet />}
         </main>
       </div>
 

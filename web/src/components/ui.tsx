@@ -84,7 +84,7 @@ export function FixtureBoard({ s, title, footer }: { s: Session; title?: ReactNo
   const label =
     s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.kind === "tournament" ? s.title || "Tournament" : `${s.dayLabel} session`;
   return (
-    <div className="relative overflow-hidden rounded-[26px] bg-navy text-white">
+    <div className="fixture relative overflow-hidden rounded-[26px] bg-navy text-white">
       {/* centre circle and halfway line, like the pitch */}
       <svg className="pointer-events-none absolute -right-16 -top-10 h-64 w-64 opacity-[0.09]" viewBox="0 0 200 200" aria-hidden>
         <circle cx="100" cy="100" r="70" fill="none" stroke="white" strokeWidth="3" />
@@ -97,9 +97,9 @@ export function FixtureBoard({ s, title, footer }: { s: Session; title?: ReactNo
           {s.cancelled ? <span className="chip bg-bad text-white">Cancelled</span> : <span>{shortDate(s.date)}</span>}
         </div>
         <div className="mt-3 flex items-end gap-4">
-          <div className="display text-[3.4rem] sm:text-[4.2rem]">{relativeDay(s.date)}</div>
+          <div className="extrude-day display text-[3.4rem] sm:text-[4.2rem]">{relativeDay(s.date)}</div>
         </div>
-        <div className="display mt-1 text-[2.2rem] text-[#9fb6ff] sm:text-[2.6rem]">
+        <div className="extrude-time display mt-1 text-[2.2rem] text-[#9fb6ff] sm:text-[2.6rem]">
           {time12(s.startTime)} <span className="text-white/40">–</span> {time12(s.endTime)}
         </div>
         <p className="mt-3 text-[15px] font-semibold">{label}</p>

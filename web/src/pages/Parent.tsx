@@ -59,17 +59,17 @@ export function ParentHome() {
     <>
       <PageTitle title={`Hello, ${first}`} sub={children.length > 1 ? "Choose a child to see their progress." : undefined} />
       {children.length > 1 && (
-        <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4" role="tablist" aria-label="Your children">
+        <div className="-mx-4 mb-2 flex gap-3 overflow-x-auto px-4 pb-6 pt-2" role="tablist" aria-label="Your children">
           {children.map((c) => (
             <button key={c.id} role="tab" aria-selected={c.id === child.id} onClick={() => setSelected(c.id)}
-              className={`flex items-center gap-2 whitespace-nowrap rounded-full py-1.5 pl-1.5 pr-4 text-[15px] font-semibold ${c.id === child.id ? "bg-navy text-white" : "bg-white text-navy ring-1 ring-line"}`}>
-              <span className="grid h-8 w-8 place-items-center rounded-full text-sm text-white" style={{ background: c.color }}>{c.firstName[0]}</span>
+              className="token flex items-center gap-2 whitespace-nowrap rounded-full py-1.5 pl-1.5 pr-4 text-[15px] font-semibold text-navy">
+              <span className="bead grid h-8 w-8 place-items-center rounded-full text-sm text-white" style={{ background: c.color }}>{c.firstName[0]}</span>
               {c.firstName}
             </button>
           ))}
         </div>
       )}
-      <ChildDashboard child={child} />
+      <ChildDashboard key={child.id} child={child} />
     </>
   );
 }
@@ -117,12 +117,12 @@ function ChildDashboard({ child }: { child: Child }) {
   };
 
   return (
-    <div>
+    <div className="rise">
       {p.__offline && <p className="mb-3 rounded-xl bg-warn/15 p-3 text-sm font-semibold text-warn">Offline: showing what was saved on {dateTime12(new Date(p.__offline).toISOString())}.</p>}
 
       {/* Welfare first: an injury is the most urgent thing a parent can see. */}
       {openInjuries.map((j) => (
-        <div key={j.id} role="alert" className={`mb-4 rounded-[22px] p-4 ring-1 ${j.severity === "serious" || j.severity === "moderate" ? "bg-bad/10 ring-bad/30" : "bg-warn/10 ring-warn/30"}`}>
+        <div key={j.id} role="alert" className={`slab mb-5 p-4 ${j.severity === "serious" || j.severity === "moderate" ? "slab-alert" : "slab-caution"}`}>
           <div className="flex items-start gap-3">
             <HeartPulse className={`mt-0.5 h-6 w-6 shrink-0 ${j.severity === "knock" || j.severity === "minor" ? "text-warn" : "text-bad"}`} aria-hidden />
             <div className="min-w-0 flex-1">
@@ -138,21 +138,21 @@ function ChildDashboard({ child }: { child: Child }) {
 
       {next && <FixtureBoard s={next} title={child.intramuralName} footer={<Link to="/schedule" className="text-sm font-semibold text-white underline">Full schedule</Link>} />}
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
+      <div className="mt-6 grid grid-cols-2 gap-3">
         <div className="sheet">
           <p className="text-sm font-semibold text-slate">Attendance this season</p>
-          <p className="display mt-2 text-[2.6rem] text-navy">{p.attendance.rate == null ? "—" : `${p.attendance.rate}%`}</p>
+          <p className="extrude display mt-2 text-[2.6rem] text-navy">{p.attendance.rate == null ? "—" : `${p.attendance.rate}%`}</p>
           <p className="text-sm text-slate">{p.attendance.attended} of {p.attendance.recorded} sessions</p>
         </div>
-        <Link to={`/child/${child.id}/fees`} className="sheet block hover:ring-brand">
+        <Link to={`/child/${child.id}/fees`} className="sheet block">
           <p className="text-sm font-semibold text-slate">Balance</p>
-          <p className={`display mt-2 text-[2.1rem] ${child.balance > 0 ? "text-navy" : "text-good"}`}>{money(child.balance, child.currency)}</p>
+          <p className={`display mt-2 text-[2.1rem] ${child.balance > 0 ? "extrude text-navy" : "extrude-good text-good"}`}>{money(child.balance, child.currency)}</p>
           <p className="text-sm font-semibold text-brand">{child.balance > 0 ? "View and pay" : "All paid · statement"}</p>
         </Link>
       </div>
 
       {child.balance > 0 && child.mpesa && (
-        <button className="btn-primary mt-3 h-12 w-full bg-[#1f8a3b] text-base hover:bg-[#1a7733]" onClick={() => setPaying(true)}>
+        <button className="btn btn-mpesa mt-4 h-12 w-full text-base" onClick={() => setPaying(true)}>
           <Wallet className="h-5 w-5" /> Pay {money(child.balance, child.currency)} with M-PESA
         </button>
       )}
@@ -163,8 +163,8 @@ function ChildDashboard({ child }: { child: Child }) {
       <div className="sheet">
         {(p.virtues as { entries: number }[]).some((v) => v.entries > 0) ? (
           <>
-            <VirtueRadar data={p.virtues} compare={firstMonth} />
-            <p className="text-center text-sm text-slate">
+            <div className="well"><VirtueRadar data={p.virtues} compare={firstMonth} /></div>
+            <p className="mt-3 text-center text-sm text-slate">
               Season {p.season} average out of 10{firstMonth ? "; the dashed shape is the first month, for comparison" : ""}.
             </p>
           </>
@@ -176,7 +176,7 @@ function ChildDashboard({ child }: { child: Child }) {
       {(p.awards as any[]).length > 0 && (
         <>
           <SectionTitle>Awards</SectionTitle>
-          <ul className="grid gap-2">
+          <ul className="grid gap-3">
             {(p.awards as any[]).map((a) => (
               <li key={a.id} className="sheet flex items-start gap-3">
                 <Award className="h-6 w-6 shrink-0 text-warn" aria-hidden />
@@ -227,7 +227,7 @@ function ChildDashboard({ child }: { child: Child }) {
       {fixtures.length > 0 && (
         <>
           <SectionTitle>Upcoming fixtures & travel</SectionTitle>
-          <ul className="grid gap-2">
+          <ul className="grid gap-3">
             {fixtures.map((s) => (
               <li key={s.id} className="sheet">
                 <p className="font-bold text-navy">{s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.title || "Tournament"}</p>
@@ -288,7 +288,7 @@ export function FeesPage() {
       <>
         <PageTitle title="Fees" sub="Choose a child." />
         {children.length === 0 ? <Empty>Fees appear once your children are linked to your account.</Empty> : (
-          <ul className="grid gap-2">
+          <ul className="grid gap-3">
             {children.map((c) => (
               <li key={c.id}><Link to={`/child/${c.id}/fees`} className="sheet flex items-center justify-between font-bold text-navy">
                 {c.firstName} {c.lastName}<span className={c.balance > 0 ? "text-navy" : "text-good"}>{money(c.balance, c.currency)}</span>
@@ -313,13 +313,14 @@ function Statement({ child }: { child: Child }) {
   const a = account.data;
   return (
     <>
+      <div className="rise">
       <PageTitle title={`${child.firstName}'s fees`} sub={child.intramuralName} />
       <div className="sheet">
         <p className="text-sm font-semibold text-slate">Balance</p>
-        <p className={`display mt-1 text-[3rem] ${a.balance > 0 ? "text-navy" : "text-good"}`}>{money(a.balance, a.currency)}</p>
+        <p className={`display mt-1 text-[3rem] ${a.balance > 0 ? "extrude text-navy" : "extrude-good text-good"}`}>{money(a.balance, a.currency)}</p>
         <p className="text-sm text-slate">Charged {money(a.charged, a.currency)} · Paid {money(a.paid, a.currency)}</p>
         {a.balance > 0 && a.mpesaEnabled && (
-          <button className="btn-primary mt-4 h-12 w-full bg-[#1f8a3b] text-base hover:bg-[#1a7733]" onClick={() => setPay({ amount: a.balance, feeItemId: null })}>
+          <button className="btn btn-mpesa mt-5 h-12 w-full text-base" onClick={() => setPay({ amount: a.balance, feeItemId: null })}>
             <Wallet className="h-5 w-5" /> Pay with M-PESA
           </button>
         )}
@@ -327,7 +328,7 @@ function Statement({ child }: { child: Child }) {
 
       <SectionTitle>Upcoming balances</SectionTitle>
       {a.upcoming.length ? (
-        <ul className="grid gap-2">
+        <ul className="grid gap-3">
           {a.upcoming.map((f: any) => {
             const due = f.amount - f.paid;
             const overdue = f.dueDate && f.dueDate < new Date().toISOString().slice(0, 10);
@@ -386,6 +387,7 @@ function Statement({ child }: { child: Child }) {
       <MpesaModal open={!!pay} onClose={() => setPay(null)} playerId={child.id} childName={child.firstName} amount={pay?.amount ?? 0} feeItemId={pay?.feeItemId} currency={a.currency}
         onPaid={() => { void qc.invalidateQueries({ queryKey: ["account", child.id] }); void qc.invalidateQueries({ queryKey: ["children"] }); }} />
       {!a.mpesaEnabled && <p className="mt-4 flex items-center gap-2 text-sm text-slate"><AlertTriangle className="h-4 w-4" /> Online payment is not available in this country yet. Pay the coordinator directly.</p>}
+      </div>
     </>
   );
 }

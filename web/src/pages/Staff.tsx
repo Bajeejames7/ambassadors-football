@@ -38,7 +38,7 @@ export function StaffHome() {
             />
           )}
           <SectionTitle>Your {items.length === 1 ? "school" : "schools and clubs"}</SectionTitle>
-          <ul className="grid gap-2">
+          <ul className="grid gap-3">
             {items.map((i) => (
               <li key={i.id}>
                 <Link to={`/i/${i.id}`} className="sheet flex items-center gap-3 hover:ring-brand">
@@ -77,7 +77,7 @@ export function SchedulePage() {
         {[...byDate].map(([date, list]) => (
           <section key={date}>
             <h2 className="condensed mb-2 text-lg text-navy">{longDate(date)}</h2>
-            <ul className="grid gap-2">
+            <ul className="grid gap-3">
               {list.map((s) => {
                 const body = (
                   <div className={`sheet flex gap-3 ${s.cancelled ? "opacity-60" : ""}`}>
@@ -309,11 +309,11 @@ export function SessionsTab({ i }: { i: Intramural }) {
       {i.myPermissions.includes("schedules.edit") && (
         <button className="btn-ghost mb-3" onClick={() => setAdding(true)}><CalendarPlus className="h-4 w-4" /> Add match or tournament</button>
       )}
-      <ul className="grid gap-2">{upcoming.map(row)}</ul>
+      <ul className="grid gap-3">{upcoming.map(row)}</ul>
       {past.length > 0 && (
         <>
           <SectionTitle>Past sessions</SectionTitle>
-          <ul className="grid gap-2">{past.slice(0, 8).map(row)}</ul>
+          <ul className="grid gap-3">{past.slice(0, 8).map(row)}</ul>
         </>
       )}
       {adding && <AddFixture i={i} onClose={() => setAdding(false)} onSaved={() => { setAdding(false); void qc.invalidateQueries({ queryKey: ["sessions", i.id] }); }} />}
@@ -373,7 +373,7 @@ export function FieldIndex() {
       <PageTitle title="Field check-in" sub="Works without signal. Changes sync when you're back online." />
       {pending.length > 0 && <Link to="/field/queue" className="sheet mb-4 flex items-center justify-between font-semibold text-warn">{pending.length} change{pending.length === 1 ? "" : "s"} waiting to sync <PendingBadge /></Link>}
       {sessions.length === 0 ? <Empty>No sessions coming up.</Empty> : (
-        <ul className="grid gap-2">
+        <ul className="grid gap-3">
           {sessions.map((s) => (
             <li key={s.id}>
               <button onClick={() => nav(`/s/${s.id}/field`)} className="sheet flex w-full items-center gap-3 text-left hover:ring-brand">
