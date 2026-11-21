@@ -6,6 +6,9 @@ import "./styles.css";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { queryClient } from "./lib/queries";
 import { BASE } from "./lib/base";
+import { captureInstallPrompt } from "./lib/install";
+
+captureInstallPrompt();
 import { Layout } from "./components/Layout";
 import { DeleteAccountInfoPage, LoginPage, PrivacyPage, SignupPage } from "./pages/Auth";
 import { ChildRoute, FeesPage, ParentHome } from "./pages/Parent";

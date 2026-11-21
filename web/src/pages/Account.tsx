@@ -7,6 +7,7 @@ import { useAuth } from "../lib/auth";
 import { useNotifications } from "../lib/queries";
 import { dateTime12, PERMISSION_LABELS } from "../lib/format";
 import { Empty, Modal, NameInput, Notice, PageTitle, SectionTitle, Spinner } from "../components/ui";
+import { InstallApp } from "../components/InstallApp";
 
 const ICON: Record<string, typeof Bell> = { injury: HeartPulse, payment: Wallet, schedule: CalendarDays, award: Award, approval: ShieldCheck, privileges: ShieldCheck };
 
@@ -96,6 +97,9 @@ export function AccountPage() {
           </ul>
         </>
       )}
+
+      <SectionTitle>App</SectionTitle>
+      <InstallApp />
 
       <SectionTitle>Password</SectionTitle>
       <form onSubmit={changePw} className="sheet grid gap-3">

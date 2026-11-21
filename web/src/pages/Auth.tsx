@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { asset } from "../lib/base";
 import { useAuth, type Me } from "../lib/auth";
 import { NameInput, Notice } from "../components/ui";
+import { InstallApp } from "../components/InstallApp";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -18,6 +19,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         <h1 className="display mt-6 text-[3.3rem]">Football.<br />Faith.<br />Future.</h1>
         <p className="mt-3 text-[15px] text-white/75">Ambassadors Football — for coaches, coordinators and parents.</p>
         <div className="mt-8 rounded-[26px] bg-white p-5 text-ink">{children}</div>
+        <div className="mt-4 text-ink"><InstallApp /></div>
         <p className="mt-6 text-center text-sm text-white/60">
           <Link to="/privacy" className="underline">Privacy policy</Link> · <Link to="/delete-account" className="underline">Delete an account</Link>
         </p>
