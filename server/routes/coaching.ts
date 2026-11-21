@@ -4,7 +4,7 @@ import { HttpError, me, requirePermission, requirePlayer, requireSee, requireSta
 import { one, query } from "../db.js";
 import { isDate, today, addDays, weekdayOf } from "../util.js";
 import {
-  addMentorshipLog, mentorshipInput, addTally, tallyInput, saveEquipmentCheck, equipmentInput,
+  addMentorshipLog, mentorshipInput, addTally, tallyInput, saveEquipmentCheck, equipmentInput, sessionReportInput, submitSessionReport,
 } from "../lib/field.js";
 import { notify, parentsOf } from "../lib/notify.js";
 
@@ -49,7 +49,7 @@ coachingRoutes.get("/intramurals/:id/tally", async (req, res) => {
   const user = me(req);
   const id = Number(req.params.id);
   await requireSee(user, id);
-  const intramural = await one(`SELECT teams FROM intramurals WHERE id = $1`, [id]);
+  const intramural = await one(`SELECT CASE WHEN program_mode = 'school' THEN teams ELSE '[]'::jsonb END AS teams FROM intramurals WHERE id = $1`, [id]);
   const since = isDate(String(req.query.since ?? "")) ? String(req.query.since) : `${today().slice(0, 4)}-01-01`;
   const [standings, sportsmanship, matches, awards] = await Promise.all([
     query(
@@ -177,6 +177,8 @@ coachingRoutes.get("/parent/children", async (req, res) => {
             coalesce((SELECT sum(amount) FROM fee_items f WHERE f.player_id = p.id), 0)
               - coalesce((SELECT sum(amount) FROM payments y WHERE y.player_id = p.id AND y.status = 'completed'), 0) AS balance,
             (SELECT count(*) FROM injuries j WHERE j.player_id = p.id AND j.parent_acknowledged_at IS NULL) AS "unacknowledgedInjuries",
+            (SELECT count(*) FROM unpaid_alerts u WHERE u.player_id = p.id AND u.resolved_at IS NULL) AS "unpaidAlerts",
+            i.program_mode AS "programMode",
             a.form_url AS "registrationFormUrl"
        FROM players p JOIN intramurals i ON i.id = p.intramural_id JOIN countries c ON c.id = i.country_id
        LEFT JOIN airtable_configs a ON a.intramural_id = i.id
@@ -187,3 +189,49 @@ coachingRoutes.get("/parent/children", async (req, res) => {
 });
 
 export { requirePlayer };
+
+// ---- post-session reports ----------------------------------------------------------------
+
+coachingRoutes.post("/sessions/:id/reports", async (req, res) => {
+  res.status(201).json(await submitSessionReport(me(req), sessionReportInput.parse({ ...req.body, sessionId: Number(req.params.id) })));
+});
+
+/** Reports for one school: admins see all; a coach sees their own. */
+coachingRoutes.get("/intramurals/:id/reports", async (req, res) => {
+  const user = me(req);
+  requireStaff(user);
+  const id = Number(req.params.id);
+  await requireSee(user, id);
+  res.json(
+    await query(
+      `SELECT r.id, r.session_id AS "sessionId", s.date AS "sessionDate", s.kind, r.age_group AS "ageGroup",
+              r.present_count AS "presentCount", r.roster_count AS "rosterCount", r.attendance_summary AS "attendanceSummary",
+              r.player_progress AS "playerProgress", r.pitch_notes AS "pitchNotes", r.created_at AS "createdAt", u.name AS coach
+         FROM session_reports r JOIN sessions s ON s.id = r.session_id LEFT JOIN users u ON u.id = r.coach_id
+        WHERE s.intramural_id = $1 AND ($2 OR r.coach_id = $3)
+        ORDER BY r.created_at DESC LIMIT 100`,
+      [id, user.isSuperAdmin, user.id],
+    ),
+  );
+});
+
+/**
+ * The schools and clubs a parent can register with, each with its own Airtable
+ * registration & M-PESA form. Only public details (no rosters), so parents
+ * waiting for approval can register too.
+ */
+coachingRoutes.get("/parent/programs", async (req, res) => {
+  const user = me(req);
+  res.json(
+    await query(
+      `SELECT i.id, i.name, i.short_code AS "shortCode", i.color, i.logo, i.kind, i.program_mode AS "programMode",
+              i.session_weekday AS "sessionWeekday", to_char(i.session_start,'HH24:MI') AS "sessionStart",
+              to_char(i.session_end,'HH24:MI') AS "sessionEnd", i.location,
+              a.form_url AS "formUrl", (i.id = ANY($2::int[])) AS "mine"
+         FROM intramurals i LEFT JOIN airtable_configs a ON a.intramural_id = i.id
+        WHERE NOT i.archived AND ($1::int IS NULL OR i.country_id = $1)
+        ORDER BY (i.id = ANY($2::int[])) DESC, i.position, i.name`,
+      [user.isSuperAdmin ? null : user.countryId, user.childIntramurals],
+    ),
+  );
+});

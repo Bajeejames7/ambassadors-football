@@ -12,7 +12,7 @@
   --edge-1: #dfe5f0;
   --edge-2: #d2daea;
   --edge-3: #c4cee2;
-  --shadow: 22 34 79;
+  --shadow: 15 33 71;
   perspective: 1400px;
   perspective-origin: 50% 0%;
 }
@@ -106,7 +106,9 @@
 
 .parent-3d .fixture {
   border-radius: 26px;
-  background: linear-gradient(180deg, #1d2c63 0%, #16224f 60%, #0f1a3f 100%);
+  background-image: linear-gradient(135deg, rgba(15, 33, 71, 0.92), rgba(15, 33, 71, 0.78)), var(--hero-url, none);
+  background-size: cover;
+  background-position: center 35%;
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.18),
     0 2px 0 #0e1738,
@@ -197,7 +199,7 @@
   transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.25s;
 }
 .parent-3d .token[aria-selected="true"] {
-  background: linear-gradient(180deg, #24346f, #16224f);
+  background: linear-gradient(180deg, #1d3570, #0f2147);
   color: #fff;
   transform: translateY(-3px);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 3px 0 #0b1433, 0 6px 0 #091027, 0 16px 20px -8px rgb(var(--shadow) / 0.55);

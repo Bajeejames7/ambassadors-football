@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { LoaderCircle, X } from "lucide-react";
 import type { Session } from "../lib/queries";
-import { relativeDay, shortDate, time12 } from "../lib/format";
+import { dateRange, relativeDay, sessionLabel, time12 } from "../lib/format";
 import { asset } from "../lib/base";
 
 export function Spinner({ label = "Loading…" }: { label?: string }) {
@@ -30,7 +30,19 @@ export function Notice({ tone, children }: { tone: "good" | "bad"; children: Rea
   );
 }
 
-export function PageTitle({ title, sub, action }: { title: ReactNode; sub?: ReactNode; action?: ReactNode }) {
+export function PageTitle({ title, sub, action, banner }: { title: ReactNode; sub?: ReactNode; action?: ReactNode; banner?: boolean }) {
+  if (banner) {
+    // Portal header: programme photo under navy, white text.
+    return (
+      <div className="photo-navy mb-5 flex items-end justify-between gap-3 rounded-[26px] px-5 pb-5 pt-10 text-white">
+        <div className="min-w-0">
+          <h1 className="display text-[2.1rem] sm:text-[2.6rem]">{title}</h1>
+          {sub && <p className="mt-1.5 text-[15px] text-white/80">{sub}</p>}
+        </div>
+        {action}
+      </div>
+    );
+  }
   return (
     <div className="mb-5 flex items-end justify-between gap-3">
       <div className="min-w-0">
@@ -82,10 +94,9 @@ export function Crest({ i, size = 40 }: { i: { logo?: string; shortCode: string;
  * The one bold element of the design.
  */
 export function FixtureBoard({ s, title, footer }: { s: Session; title?: ReactNode; footer?: ReactNode }) {
-  const label =
-    s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.kind === "tournament" ? s.title || "Tournament" : `${s.dayLabel} session`;
+  const label = sessionLabel(s);
   return (
-    <div className="fixture relative overflow-hidden rounded-[26px] bg-navy text-white">
+    <div className="fixture photo-navy relative overflow-hidden rounded-[26px] text-white">
       {/* centre circle and halfway line, like the pitch */}
       <svg className="pointer-events-none absolute -right-16 -top-10 h-64 w-64 opacity-[0.09]" viewBox="0 0 200 200" aria-hidden>
         <circle cx="100" cy="100" r="70" fill="none" stroke="white" strokeWidth="3" />
@@ -95,7 +106,7 @@ export function FixtureBoard({ s, title, footer }: { s: Session; title?: ReactNo
       <div className="relative p-5">
         <div className="flex items-center justify-between gap-2 text-[13px] font-semibold text-white/75">
           <span>{title ?? s.intramuralName}</span>
-          {s.cancelled ? <span className="chip bg-bad text-white">Cancelled</span> : <span>{shortDate(s.date)}</span>}
+          {s.cancelled ? <span className="chip bg-bad text-white">Cancelled</span> : <span>{dateRange(s.date, s.endDate)}</span>}
         </div>
         <div className="mt-3 flex items-end gap-4">
           <div className="extrude-day display text-[3.4rem] sm:text-[4.2rem]">{relativeDay(s.date)}</div>

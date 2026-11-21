@@ -3,11 +3,11 @@
 
 @theme {
   --font-sans: "Archivo Variable", "Archivo", system-ui, sans-serif;
-  --color-navy: #16224f;
-  --color-navy-2: #22306a;
+  --color-navy: #0f2147;
+  --color-navy-2: #1a2f5e;
   --color-brand: #2f5bd3;
   --color-page: #eef2f7;
-  --color-ink: #16224f;
+  --color-ink: #0f2147;
   --color-slate: #5b6690;
   --color-line: #d9e0ec;
   --color-good: #13996b;
@@ -40,3 +40,12 @@ body {
 @utility btn-danger { @apply btn bg-bad text-white; }
 @utility chip { @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold; }
 :root { accent-color: var(--color-navy); }
+
+/* Programme photo under a deep navy overlay: login, home session banner, portal headers.
+   --hero-url is set at start-up (main.tsx) so it follows the app's base path. */
+@utility photo-navy {
+  background-color: var(--color-navy);
+  background-image: linear-gradient(135deg, rgba(15, 33, 71, 0.92), rgba(15, 33, 71, 0.78)), var(--hero-url, none);
+  background-size: cover;
+  background-position: center 35%;
+}

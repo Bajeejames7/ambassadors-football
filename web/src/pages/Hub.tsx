@@ -11,8 +11,10 @@ import { SessionsTab } from "./Staff";
 import { PaymentsTab, PeopleTab, SetupTab } from "./Admin";
 import { VirtueRadar } from "../components/VirtueRadar";
 import { StatusChip } from "./Parent";
+import { CoachPlayersTab, ReportsTab } from "./CoachPlayers";
+import { ageGroupFor } from "../lib/format";
 
-type Tab = "sessions" | "players" | "mentorship" | "tally" | "payments" | "people" | "setup";
+type Tab = "sessions" | "players" | "reports" | "mentorship" | "tally" | "payments" | "people" | "setup";
 
 export function IntramuralHub() {
   const { id, tab } = useParams();
@@ -25,8 +27,9 @@ export function IntramuralHub() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "sessions", label: "Sessions" },
     { id: "players", label: "Players" },
+    { id: "reports", label: "Reports" },
     { id: "mentorship", label: "Mentorship" },
-    { id: "tally", label: "Tally & awards" },
+    { id: "tally", label: i.programMode === "school" ? "Virtue Teams & awards" : "Scores & awards" },
     ...(p.includes("payments.manage") ? [{ id: "payments" as Tab, label: "Payments" }] : []),
     ...(p.includes("roles.assign") || p.includes("parents.approve") || p.includes("privileges.grant") ? [{ id: "people" as Tab, label: "People" }] : []),
     ...(p.includes("schedules.edit") || p.includes("airtable.manage") ? [{ id: "setup" as Tab, label: "Setup" }] : []),
@@ -34,16 +37,20 @@ export function IntramuralHub() {
   const current = (tabs.find((t) => t.id === tab)?.id ?? "sessions") as Tab;
   return (
     <>
-      <div className="mb-5 flex items-center gap-3">
+      <div className="photo-navy mb-5 flex items-center gap-3 rounded-[26px] px-4 pb-4 pt-8 text-white">
         <Crest i={i} size={52} />
         <div className="min-w-0">
-          <h1 className="display truncate text-[2rem] text-navy">{i.name}</h1>
-          <p className="text-sm text-slate">{WEEKDAYS[i.sessionWeekday]}s · {i.countryName}{i.coordinatorName ? ` · Coordinator: ${i.coordinatorName}` : ""}</p>
+          <h1 className="display truncate text-[2rem]">{i.name}</h1>
+          <p className="text-sm text-white/80">
+            {i.programMode === "school" ? "School · 4 Virtue Teams" : "Club · events & camps"} · {WEEKDAYS[i.sessionWeekday]}s · {i.countryName}
+            {i.myAgeGroups && i.myAgeGroups.length > 0 ? ` · You coach ${i.myAgeGroups.join(", ")}` : ""}
+          </p>
         </div>
       </div>
       <Tabs tabs={tabs} value={current} onChange={(t) => nav(`/i/${i.id}/${t}`, { replace: true })} />
       {current === "sessions" && <SessionsTab i={i} />}
       {current === "players" && <PlayersTab i={i} />}
+      {current === "reports" && <ReportsTab i={i} />}
       {current === "mentorship" && <MentorshipTab i={i} />}
       {current === "tally" && <TallyTab i={i} />}
       {current === "payments" && <PaymentsTab i={i} />}
@@ -55,51 +62,23 @@ export function IntramuralHub() {
 
 function PlayersTab({ i }: { i: Intramural }) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["players", i.id], queryFn: () => cached<any[]>(`/intramurals/${i.id}/players`) });
-  const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
-  if (q.isLoading) return <Spinner />;
-  if (q.error) return <ErrorNote error={q.error} />;
-  const list = q.data!.filter((p) => `${p.firstName} ${p.lastName}`.toLowerCase().includes(search.toLowerCase()));
   return (
     <>
-      <div className="mb-3 flex gap-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-slate" aria-hidden />
-          <input className="field pl-10" placeholder={`Search ${q.data!.length} players`} value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search players" />
-        </div>
-        {i.myPermissions.includes("players.register") && <button className="btn-primary" onClick={() => setAdding(true)}>Add</button>}
-      </div>
-      {i.airtable?.formUrl && <p className="mb-3 text-sm text-slate">Parents register on <a className="font-semibold text-brand" href={i.airtable.formUrl} target="_blank" rel="noreferrer">the school's Airtable form</a>.</p>}
-      {list.length === 0 ? <Empty>No players match.</Empty> : (
-        <ul className="sheet divide-y divide-line py-1">
-          {list.map((p) => (
-            <li key={p.id}>
-              <Link to={`/players/${p.id}`} className="flex items-center gap-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="font-bold text-navy">{p.firstName} {p.lastName}</p>
-                  <p className="text-sm text-slate">{[p.category, i.teams.find((t) => t.id === p.team)?.name ?? p.team, p.source === "walk_in" ? "Walk-in" : p.source === "airtable" ? "From Airtable" : ""].filter(Boolean).join(" · ")}</p>
-                </div>
-                {p.medicalNotes && <span className="chip bg-bad/10 text-bad">Medical</span>}
-                {p.hasParentAccount && <span className="chip bg-good/10 text-good">Parent linked</span>}
-                <ChevronRight className="h-4 w-4 text-slate" aria-hidden />
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
+      <CoachPlayersTab i={i} onAddPlayer={i.myPermissions.includes("players.register") ? () => setAdding(true) : undefined} />
       {adding && <AddPlayer i={i} onClose={() => setAdding(false)} onSaved={() => { setAdding(false); void qc.invalidateQueries({ queryKey: ["players", i.id] }); }} />}
     </>
   );
 }
 
 function AddPlayer({ i, onClose, onSaved }: { i: Intramural; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState({ firstName: "", lastName: "", dateOfBirth: "", category: i.categories[0] ?? "", team: "", guardianName: "", guardianEmail: "", guardianPhone: "", medicalNotes: "" });
+  const [f, setF] = useState({ firstName: "", lastName: "", dateOfBirth: "", birthYear: "", category: "", team: "", guardianName: "", guardianEmail: "", guardianPhone: "", medicalNotes: "" });
+  const thisYear = new Date().getFullYear();
   const [error, setError] = useState("");
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api(`/intramurals/${i.id}/players`, { method: "POST", body: { ...f, dateOfBirth: f.dateOfBirth || null } });
+      await api(`/intramurals/${i.id}/players`, { method: "POST", body: { ...f, dateOfBirth: f.dateOfBirth || null, birthYear: f.birthYear ? Number(f.birthYear) : null } });
       onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -113,8 +92,13 @@ function AddPlayer({ i, onClose, onSaved }: { i: Intramural; onClose: () => void
           <div><label className="label" htmlFor="pl">Last name</label><NameInput id="pl" value={f.lastName} onChange={(v) => setF({ ...f, lastName: v })} autoComplete="off" /></div>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <div><label className="label" htmlFor="pd">Date of birth</label><input id="pd" type="date" className="field" value={f.dateOfBirth} onChange={(e) => setF({ ...f, dateOfBirth: e.target.value })} /></div>
-          <div><label className="label" htmlFor="pc">Age group</label><select id="pc" className="field" value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}>{i.categories.map((c) => <option key={c}>{c}</option>)}</select></div>
+          <div><label className="label" htmlFor="py">Birth year</label>
+            <select id="py" className="field" value={f.birthYear} onChange={(e) => setF({ ...f, birthYear: e.target.value, category: e.target.value ? ageGroupFor(Number(e.target.value)) : f.category })}>
+              <option value="">Choose</option>
+              {Array.from({ length: 16 }, (_, k) => thisYear - 3 - k).map((y) => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+          <div><label className="label" htmlFor="pc">Age group</label><select id="pc" className="field" value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}><option value="">From birth year</option>{i.categories.map((c) => <option key={c}>{c}</option>)}</select></div>
         </div>
         {i.teams.length > 0 && <div><label className="label" htmlFor="pt">Virtue team</label><select id="pt" className="field" value={f.team} onChange={(e) => setF({ ...f, team: e.target.value })}><option value="">None</option>{i.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>}
         <div><label className="label" htmlFor="pg">Parent or guardian</label><NameInput id="pg" value={f.guardianName} onChange={(v) => setF({ ...f, guardianName: v })} autoComplete="off" /></div>
@@ -122,6 +106,7 @@ function AddPlayer({ i, onClose, onSaved }: { i: Intramural; onClose: () => void
           <div><label className="label" htmlFor="pp">Parent phone</label><input id="pp" className="field" type="tel" value={f.guardianPhone} onChange={(e) => setF({ ...f, guardianPhone: e.target.value })} /></div>
           <div><label className="label" htmlFor="pe">Parent email</label><input id="pe" className="field" type="email" value={f.guardianEmail} onChange={(e) => setF({ ...f, guardianEmail: e.target.value })} /></div>
         </div>
+        <div><label className="label" htmlFor="pd">Date of birth (optional)</label><input id="pd" type="date" className="field" value={f.dateOfBirth} onChange={(e) => setF({ ...f, dateOfBirth: e.target.value, birthYear: e.target.value ? e.target.value.slice(0, 4) : f.birthYear, category: e.target.value ? ageGroupFor(Number(e.target.value.slice(0, 4))) : f.category })} /></div>
         <div><label className="label" htmlFor="pm">Allergies or medical notes</label><textarea id="pm" className="field" rows={2} value={f.medicalNotes} onChange={(e) => setF({ ...f, medicalNotes: e.target.value })} /></div>
         {error && <Notice tone="bad">{error}</Notice>}
         <button className="btn-primary">Register player</button>

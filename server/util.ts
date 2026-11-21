@@ -94,3 +94,16 @@ export function hhmm(time: string): string {
 export function seasonOf(date: string): string {
   return date.slice(0, 4);
 }
+
+/** The age groups the programme uses, youngest first. */
+export const AGE_GROUPS = ["U7", "U9", "U11", "U13", "U15", "U17"] as const;
+
+/**
+ * Age group for a birth year in a given season: the youngest group the child
+ * is still under. Born 2017, season 2026 → age 9 → U11. Older than 16 → U17.
+ */
+export function ageGroupFor(birthYear: number, seasonYear: number): string {
+  const age = seasonYear - birthYear;
+  for (const g of AGE_GROUPS) if (age < Number(g.slice(1))) return g;
+  return "U17";
+}

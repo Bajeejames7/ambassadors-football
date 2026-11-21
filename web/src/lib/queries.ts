@@ -30,6 +30,9 @@ export interface Intramural {
   defaultSchedule: { time: string; activity: string }[];
   teams: { id: string; name: string; color: string }[];
   categories: string[];
+  programMode: "school" | "club";
+  myAgeGroups?: string[];
+  assigned?: boolean;
   countryId: number;
   countryName: string;
   currency: string;
@@ -46,7 +49,8 @@ export interface Session {
   id: number;
   intramuralId: number;
   date: string;
-  kind: "training" | "match" | "tournament";
+  kind: "training" | "match" | "tournament" | "camp" | "clinic";
+  endDate?: string | null;
   title: string;
   startTime: string;
   endTime: string;

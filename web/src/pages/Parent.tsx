@@ -1,14 +1,13 @@
 import { useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Award, CheckCircle2, ExternalLink, HeartPulse, UserPlus, Wallet } from "lucide-react";
+import { Award, CheckCircle2, HeartPulse, UserPlus, Wallet } from "lucide-react";
 import { api } from "../lib/api";
 import { cached } from "../lib/offline";
 import { useUpcoming } from "../lib/queries";
-import { dateTime12, money, shortDate, VIRTUE_LABELS } from "../lib/format";
+import { dateRange, dateTime12, money, sessionLabel, shortDate, VIRTUE_LABELS } from "../lib/format";
 import { Crest, Empty, ErrorNote, FixtureBoard, PageTitle, SectionTitle, Spinner } from "../components/ui";
 import { VirtueRadar } from "../components/VirtueRadar";
-import { MpesaModal } from "../components/MpesaModal";
 import { useAuth } from "../lib/auth";
 
 export interface Child {
@@ -27,6 +26,8 @@ export interface Child {
   balance: number;
   unacknowledgedInjuries: number;
   registrationFormUrl: string | null;
+  unpaidAlerts: number;
+  programMode: "school" | "club";
 }
 
 export const useChildren = () => useQuery({ queryKey: ["children"], queryFn: () => cached<{ pending: boolean; children: Child[] }>("/parent/children") });
@@ -57,7 +58,7 @@ export function ParentHome() {
   const child = children.find((c) => c.id === selected) ?? children[0];
   return (
     <>
-      <PageTitle title={`Hello, ${first}`} sub={children.length > 1 ? "Choose a child to see their progress." : undefined} />
+      <PageTitle banner title={`Hello, ${first}`} sub={children.length > 1 ? "Choose a child to see their progress." : "Your child's progress, sessions and registration."} />
       {children.length > 1 && (
         <div className="-mx-4 mb-2 flex gap-3 overflow-x-auto px-4 pb-6 pt-2" role="tablist" aria-label="Your children">
           {children.map((c) => (
@@ -88,11 +89,16 @@ export function ChildRoute() {
   );
 }
 
-function ChildDashboard({ child }: { child: Child }) {
+/**
+ * One child's progress. `preview` is the admin's read-only view of what the
+ * parent sees (Creator Control → Parents → Preview): no parent-only actions.
+ */
+export function ChildDashboard({ child, preview = false }: { child: Child; preview?: boolean }) {
   const qc = useQueryClient();
   const progress = useQuery({ queryKey: ["progress", child.id], queryFn: () => cached<any>(`/players/${child.id}/progress`) });
+  const unpaid = useQuery({ queryKey: ["unpaid", child.id], queryFn: () => cached<any[]>(`/players/${child.id}/unpaid-alerts`) });
   const upcoming = useUpcoming();
-  const [paying, setPaying] = useState(false);
+  const openUnpaid = (unpaid.data ?? []).filter((u) => !u.resolvedAt);
   const next = (upcoming.data ?? []).find((s) => s.intramuralId === child.intramuralId && !s.cancelled);
   const fixtures = (upcoming.data ?? []).filter((s) => s.intramuralId === child.intramuralId && s.kind !== "training").slice(0, 3);
 
@@ -118,6 +124,20 @@ function ChildDashboard({ child }: { child: Child }) {
 
   return (
     <div className="rise">
+      <p className="mb-4 flex flex-wrap items-center gap-2 text-[15px] text-slate">
+        <span className="chip bg-navy text-white">{child.category || "Age group not set"}</span>
+        {child.intramuralName}
+      </p>
+      {openUnpaid.map((u) => (
+        <div key={u.id} role="alert" className="slab slab-alert mb-5 p-4">
+          <p className="font-bold text-navy">Unpaid: {u.title}{u.amount ? ` · ${money(Number(u.amount), child.currency)}` : ""}</p>
+          {u.note && <p className="mt-1 text-[15px]">{u.note}</p>}
+          <p className="mt-1 text-xs text-slate">Flagged {dateTime12(u.createdAt)}</p>
+          {!preview && (
+            <Link to={`/register?school=${child.intramuralId}`} className="btn btn-mpesa mt-3 min-h-10 px-4"><Wallet className="h-4 w-4" /> Pay through the form</Link>
+          )}
+        </div>
+      ))}
       {p.__offline && <p className="mb-3 rounded-xl bg-warn/15 p-3 text-sm font-semibold text-warn">Offline: showing what was saved on {dateTime12(new Date(p.__offline).toISOString())}.</p>}
 
       {/* Welfare first: an injury is the most urgent thing a parent can see. */}
@@ -130,7 +150,7 @@ function ChildDashboard({ child }: { child: Child }) {
               <p className="mt-1 text-[15px] text-ink">{j.description}</p>
               {j.actionTaken && <p className="mt-1 text-sm text-slate">What the coach did: {j.actionTaken}</p>}
               <p className="mt-1 text-xs text-slate">Reported by {j.reportedBy ?? "a coach"}, {dateTime12(j.createdAt)}</p>
-              <button className="btn-ghost mt-3" onClick={() => acknowledge(j.id)}><CheckCircle2 className="h-4 w-4" /> I've seen this</button>
+              {!preview && <button className="btn-ghost mt-3" onClick={() => acknowledge(j.id)}><CheckCircle2 className="h-4 w-4" /> I've seen this</button>}
             </div>
           </div>
         </div>
@@ -151,13 +171,11 @@ function ChildDashboard({ child }: { child: Child }) {
         </Link>
       </div>
 
-      {child.balance > 0 && child.mpesa && (
-        <button className="btn btn-mpesa mt-4 h-12 w-full text-base" onClick={() => setPaying(true)}>
-          <Wallet className="h-5 w-5" /> Pay {money(child.balance, child.currency)} with M-PESA
-        </button>
+      {(child.balance > 0 || openUnpaid.length > 0) && !preview && (
+        <Link to={`/register?school=${child.intramuralId}`} className="btn btn-mpesa mt-4 h-12 w-full text-base">
+          <Wallet className="h-5 w-5" /> Register & pay (M-PESA)
+        </Link>
       )}
-      <MpesaModal open={paying} onClose={() => setPaying(false)} playerId={child.id} childName={child.firstName} amount={child.balance} currency={child.currency}
-        onPaid={() => { void qc.invalidateQueries({ queryKey: ["children"] }); void qc.invalidateQueries({ queryKey: ["account", child.id] }); }} />
 
       <SectionTitle>Character & virtue growth</SectionTitle>
       <div className="sheet">
@@ -226,12 +244,12 @@ function ChildDashboard({ child }: { child: Child }) {
 
       {fixtures.length > 0 && (
         <>
-          <SectionTitle>Upcoming fixtures & travel</SectionTitle>
+          <SectionTitle>Upcoming matches, camps & travel</SectionTitle>
           <ul className="grid gap-3">
             {fixtures.map((s) => (
               <li key={s.id} className="sheet">
-                <p className="font-bold text-navy">{s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.title || "Tournament"}</p>
-                <p className="text-[15px]">{shortDate(s.date)}, {s.timeLabel}</p>
+                <p className="font-bold text-navy">{sessionLabel(s)}</p>
+                <p className="text-[15px]">{dateRange(s.date, s.endDate)}, {s.timeLabel}</p>
                 {s.location && <p className="text-sm text-slate">Pitch: {s.location}</p>}
                 {s.dressCode && <p className="text-sm text-slate">Kit: {s.dressCode}</p>}
                 {s.travelNotes && <p className="mt-1 text-sm text-ink">{s.travelNotes}</p>}
@@ -244,12 +262,8 @@ function ChildDashboard({ child }: { child: Child }) {
       <SectionTitle>Register a brother or sister</SectionTitle>
       <div className="sheet flex items-center gap-3">
         <Crest i={{ logo: child.logo, shortCode: child.shortCode, color: child.color, name: child.intramuralName }} />
-        <p className="flex-1 text-[15px] text-slate">{child.intramuralName} uses its own registration form.</p>
-        {child.registrationFormUrl ? (
-          <a className="btn-blue" href={child.registrationFormUrl} target="_blank" rel="noreferrer"><UserPlus className="h-4 w-4" /> Open form <ExternalLink className="h-3.5 w-3.5" /></a>
-        ) : (
-          <span className="text-sm text-slate">Ask the coordinator</span>
-        )}
+        <p className="flex-1 text-[15px] text-slate">Register and pay through {child.intramuralName}'s form, or pick another school or club.</p>
+        {!preview && <Link className="btn-blue" to={`/register?school=${child.intramuralId}`}><UserPlus className="h-4 w-4" /> Register</Link>}
       </div>
     </div>
   );
@@ -307,7 +321,6 @@ export function FeesPage() {
 function Statement({ child }: { child: Child }) {
   const qc = useQueryClient();
   const account = useQuery({ queryKey: ["account", child.id], queryFn: () => cached<any>(`/players/${child.id}/account`) });
-  const [pay, setPay] = useState<{ amount: number; feeItemId: number | null } | null>(null);
   if (account.isLoading) return <Spinner />;
   if (account.error) return <ErrorNote error={account.error} />;
   const a = account.data;
@@ -319,10 +332,10 @@ function Statement({ child }: { child: Child }) {
         <p className="text-sm font-semibold text-slate">Balance</p>
         <p className={`display mt-1 text-[3rem] ${a.balance > 0 ? "extrude text-navy" : "extrude-good text-good"}`}>{money(a.balance, a.currency)}</p>
         <p className="text-sm text-slate">Charged {money(a.charged, a.currency)} · Paid {money(a.paid, a.currency)}</p>
-        {a.balance > 0 && a.mpesaEnabled && (
-          <button className="btn btn-mpesa mt-5 h-12 w-full text-base" onClick={() => setPay({ amount: a.balance, feeItemId: null })}>
-            <Wallet className="h-5 w-5" /> Pay with M-PESA
-          </button>
+        {a.balance > 0 && (
+          <Link to={`/register?school=${child.intramuralId}`} className="btn btn-mpesa mt-5 h-12 w-full text-base">
+            <Wallet className="h-5 w-5" /> Pay through the registration form
+          </Link>
         )}
       </div>
 
@@ -342,7 +355,7 @@ function Statement({ child }: { child: Child }) {
                 </div>
                 <div className="text-right">
                   <p className="font-bold">{money(due, a.currency)}</p>
-                  {a.mpesaEnabled && <button className="text-sm font-semibold text-brand" onClick={() => setPay({ amount: due, feeItemId: f.id })}>Pay this</button>}
+                  <Link className="text-sm font-semibold text-brand" to={`/register?school=${child.intramuralId}`}>Pay</Link>
                 </div>
               </li>
             );
@@ -384,9 +397,7 @@ function Statement({ child }: { child: Child }) {
         {a.fees.length === 0 && <li className="py-3 text-slate">No charges yet.</li>}
       </ul>
 
-      <MpesaModal open={!!pay} onClose={() => setPay(null)} playerId={child.id} childName={child.firstName} amount={pay?.amount ?? 0} feeItemId={pay?.feeItemId} currency={a.currency}
-        onPaid={() => { void qc.invalidateQueries({ queryKey: ["account", child.id] }); void qc.invalidateQueries({ queryKey: ["children"] }); }} />
-      {!a.mpesaEnabled && <p className="mt-4 flex items-center gap-2 text-sm text-slate"><AlertTriangle className="h-4 w-4" /> Online payment is not available in this country yet. Pay the coordinator directly.</p>}
+      <p className="mt-4 text-sm text-slate">Payments go through {child.intramuralName}'s registration form (M-PESA). They show here once the coordinator records them.</p>
       </div>
     </>
   );

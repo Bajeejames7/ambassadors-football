@@ -15,7 +15,7 @@ import { db, idbGet, idbSet } from "./idb";
  *   Background Sync when the app is closed.
  */
 
-export type OpType = "attendance" | "walk_in" | "tally" | "equipment" | "mentorship" | "injury" | "availability";
+export type OpType = "attendance" | "walk_in" | "tally" | "equipment" | "mentorship" | "injury" | "availability" | "session_report";
 
 export interface Op {
   id: string;

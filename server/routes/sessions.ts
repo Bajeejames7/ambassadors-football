@@ -12,7 +12,7 @@ export const sessionRoutes = Router();
 const SESSION_FIELDS = `s.id, s.intramural_id AS "intramuralId", s.date, s.kind, s.title,
   to_char(s.start_time,'HH24:MI') AS "startTime", to_char(s.end_time,'HH24:MI') AS "endTime",
   s.location, s.dress_code AS "dressCode", s.opponent, s.travel_notes AS "travelNotes",
-  s.schedule, s.roles, s.cancelled, s.version, s.updated_at AS "updatedAt"`;
+  s.schedule, s.roles, s.cancelled, s.version, s.updated_at AS "updatedAt", s.end_date AS "endDate"`;
 
 function decorate<T extends { date: string; startTime: string; endTime: string }>(s: T) {
   return { ...s, dayLabel: WEEKDAYS[weekdayOf(s.date)], timeLabel: `${formatTime12(s.startTime)} – ${formatTime12(s.endTime)}` };
@@ -92,7 +92,8 @@ const timeString = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time lik
 
 const sessionInput = z.object({
   date: z.string().refine(isDate, "Pick a date"),
-  kind: z.enum(["training", "match", "tournament"]),
+  kind: z.enum(["training", "match", "tournament", "camp", "clinic"]),
+  endDate: z.string().refine(isDate, "Pick an end date").nullable().optional(),
   title: z.string().max(120).default(""),
   startTime: timeString,
   endTime: timeString,
@@ -112,19 +113,21 @@ sessionRoutes.post("/intramurals/:id/sessions", async (req, res) => {
   if (s.endTime <= s.startTime) throw new HttpError(400, "The session must end after it starts");
   const defaults = await one(`SELECT default_roles AS roles FROM intramurals WHERE id = $1`, [id]);
   const row = await one(
-    `INSERT INTO sessions (intramural_id, date, kind, title, start_time, end_time, location, dress_code, opponent, travel_notes, schedule, roles, updated_by, version)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,2) RETURNING id`,
+    `INSERT INTO sessions (intramural_id, date, kind, title, start_time, end_time, location, dress_code, opponent, travel_notes, schedule, roles, updated_by, version, end_date)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,2,$14) RETURNING id`,
     [id, s.date, s.kind, s.title, s.startTime, s.endTime, s.location, s.dressCode, s.opponent, s.travelNotes,
-     JSON.stringify(s.schedule), JSON.stringify((defaults.roles as string[]).map((role) => ({ role, userId: null }))), user.id],
+     JSON.stringify(s.schedule), JSON.stringify((defaults.roles as string[]).map((role) => ({ role, userId: null }))), user.id,
+     s.endDate && s.endDate >= s.date ? s.endDate : null],
   ).catch((err) => {
     if (err.code === "23505") throw new HttpError(409, "There is already a training on that day. Edit it instead.");
     throw err;
   });
   if (s.kind !== "training") {
-    const label = s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.title || "Tournament";
+    const label = s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}`
+      : s.title || (s.kind === "camp" ? "Camp" : s.kind === "clinic" ? "Clinic" : "Tournament");
     await notify(await parentsInIntramural(id), {
       kind: "schedule",
-      title: `${label} on ${WEEKDAYS[weekdayOf(s.date)]} ${s.date}`,
+      title: `${label} on ${WEEKDAYS[weekdayOf(s.date)]} ${s.date}${s.endDate && s.endDate > s.date ? ` to ${s.endDate}` : ""}`,
       body: [`${formatTime12(s.startTime)} – ${formatTime12(s.endTime)}`, s.location, s.dressCode && `Kit: ${s.dressCode}`, s.travelNotes]
         .filter(Boolean).join("\n"),
       link: "/schedule",
@@ -165,7 +168,7 @@ sessionRoutes.patch("/sessions/:id", async (req, res) => {
   if (end <= start) throw new HttpError(400, "The session must end after it starts");
 
   const cols: Record<string, unknown> = {
-    date: rest.date, kind: rest.kind, title: rest.title, start_time: rest.startTime, end_time: rest.endTime, location: rest.location,
+    date: rest.date, kind: rest.kind, title: rest.title, end_date: rest.endDate, start_time: rest.startTime, end_time: rest.endTime, location: rest.location,
     dress_code: rest.dressCode, opponent: rest.opponent, travel_notes: rest.travelNotes, cancelled: rest.cancelled,
     schedule: rest.schedule && JSON.stringify([...rest.schedule].sort((a, b) => a.time.localeCompare(b.time))),
     roles: roles && JSON.stringify(roles),

@@ -416,6 +416,63 @@ const migrations: { id: string; sql: string }[] = [
         (VALUES ('Footballs', 12), ('Cones', 30), ('Bibs / Pinnies', 24), ('Mini goals', 4), ('First aid kit', 1), ('Pump', 1)) AS e(name, n);
     `,
   },
+  {
+    id: "003_programs_age_groups_reports_alerts",
+    sql: `
+      -- School vs club: only school mode uses the 4 Virtue Teams; clubs run
+      -- special events and camps instead.
+      ALTER TABLE intramurals ADD COLUMN program_mode text NOT NULL DEFAULT 'club'
+        CHECK (program_mode IN ('school', 'club'));
+      UPDATE intramurals SET program_mode = 'school' WHERE slug = 'rafiki';
+      UPDATE intramurals SET categories = '["U7","U9","U11","U13","U15","U17"]';
+
+      -- Age-group registry: birth year drives the age group.
+      ALTER TABLE players ADD COLUMN birth_year int CHECK (birth_year BETWEEN 1990 AND 2100);
+      UPDATE players SET birth_year = extract(year FROM date_of_birth)::int WHERE date_of_birth IS NOT NULL;
+      UPDATE players SET category = regexp_replace(category, '^Under\\s*(\\d+)$', 'U\\1') WHERE category ~ '^Under';
+
+      -- Coaches rotate: each assignment can be limited to some age groups (empty = all).
+      ALTER TABLE user_intramurals ADD COLUMN age_groups text[] NOT NULL DEFAULT '{}';
+
+      -- Special events and camps (Summer Camp, clinics) alongside sessions.
+      ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_kind_check;
+      ALTER TABLE sessions ADD CONSTRAINT sessions_kind_check
+        CHECK (kind IN ('training', 'match', 'tournament', 'camp', 'clinic'));
+      ALTER TABLE sessions ADD COLUMN end_date date;
+
+      -- Post-session feedback from a coach to the admins.
+      CREATE TABLE session_reports (
+        id                 serial PRIMARY KEY,
+        session_id         int NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        coach_id           int REFERENCES users(id) ON DELETE SET NULL,
+        age_group          text NOT NULL DEFAULT '',
+        present_count      int NOT NULL DEFAULT 0,
+        roster_count       int NOT NULL DEFAULT 0,
+        attendance_summary text NOT NULL DEFAULT '',
+        player_progress    text NOT NULL DEFAULT '',
+        pitch_notes        text NOT NULL DEFAULT '',
+        client_id          text UNIQUE,
+        created_at         timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX session_reports_session_idx ON session_reports (session_id);
+
+      -- "Unpaid" flags an admin raises for a player's session or camp; the
+      -- parents are alerted, and the flag is cleared once paid.
+      CREATE TABLE unpaid_alerts (
+        id          serial PRIMARY KEY,
+        player_id   int NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        session_id  int REFERENCES sessions(id) ON DELETE SET NULL,
+        title       text NOT NULL,
+        amount      numeric(12, 2) CHECK (amount IS NULL OR amount > 0),
+        note        text NOT NULL DEFAULT '',
+        created_by  int REFERENCES users(id) ON DELETE SET NULL,
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        resolved_at timestamptz,
+        resolved_by int REFERENCES users(id) ON DELETE SET NULL
+      );
+      CREATE INDEX unpaid_alerts_player_idx ON unpaid_alerts (player_id) WHERE resolved_at IS NULL;
+    `,
+  },
 ];
 
 export async function migrate(): Promise<void> {

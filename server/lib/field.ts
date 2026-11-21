@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { HttpError, type Me, requirePermission, requireStaff, requireSee, intramuralRef } from "../auth.js";
 import { one, query, transaction } from "../db.js";
-import { titleCaseName, normalizePhone, normalizeEmail, isDate } from "../util.js";
-import { notify, parentsOf } from "./notify.js";
+import { titleCaseName, normalizePhone, normalizeEmail, isDate, ageGroupFor, seasonOf, today } from "../util.js";
+import { allAdmins, notify, parentsOf } from "./notify.js";
 
 /**
  * Field actions coaches take on the pitch. Each can arrive live (REST) or late
@@ -72,6 +72,8 @@ export const playerInput = z.object({
   firstName: z.string().trim().min(1, "Enter the player's first name").max(60),
   lastName: z.string().trim().max(60).default(""),
   dateOfBirth: z.string().refine(isDate, "Date of birth must be YYYY-MM-DD").nullable().optional(),
+  /** Birth year alone is enough: it decides the age group (U7…U17). */
+  birthYear: z.number().int().min(1990).max(2100).nullable().optional(),
   category: z.string().max(40).default(""),
   team: z.string().max(40).default(""),
   guardianName: z.string().max(100).default(""),
@@ -99,6 +101,9 @@ export async function registerPlayer(me: Me, input: z.infer<typeof playerInput>)
   const email = input.guardianEmail ? normalizeEmail(input.guardianEmail) : "";
   if (email && !z.email().safeParse(email).success) throw new HttpError(400, "The parent's email does not look right");
 
+  const birthYear = input.birthYear ?? (input.dateOfBirth ? Number(input.dateOfBirth.slice(0, 4)) : null);
+  // Players land in their age-group roster automatically.
+  const category = input.category || (birthYear ? ageGroupFor(birthYear, Number(seasonOf(today()))) : "");
   const firstName = titleCaseName(input.firstName);
   const lastName = titleCaseName(input.lastName);
   const dupe = await one(
@@ -114,11 +119,11 @@ export async function registerPlayer(me: Me, input: z.infer<typeof playerInput>)
     const created = (
       await c.query(
         `INSERT INTO players (intramural_id, first_name, last_name, date_of_birth, category, team, guardian_name,
-                              guardian_email, guardian_phone, medical_notes, source, client_id, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-        [input.intramuralId, firstName, lastName, input.dateOfBirth ?? null, input.category, input.team,
+                              guardian_email, guardian_phone, medical_notes, source, client_id, created_by, birth_year)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+        [input.intramuralId, firstName, lastName, input.dateOfBirth ?? null, category, input.team,
          titleCaseName(input.guardianName), email, phone ?? "", input.medicalNotes, input.walkIn ? "walk_in" : "app",
-         input.clientId ?? null, me.id],
+         input.clientId ?? null, me.id, birthYear],
       )
     ).rows[0];
     // Link any parent account already registered with this email/phone (still needs approval).
@@ -308,3 +313,41 @@ export async function answerAvailability(me: Me, input: z.infer<typeof availabil
 
 /** Used by routes that only need to confirm a person can see an intramural. */
 export { requireSee, intramuralRef };
+
+// ---- post-session feedback to the admins ----------------------------------------------
+
+export const sessionReportInput = z.object({
+  sessionId: z.number().int(),
+  clientId,
+  ageGroup: z.string().max(10).default(""),
+  presentCount: z.number().int().min(0).max(1000).default(0),
+  rosterCount: z.number().int().min(0).max(1000).default(0),
+  attendanceSummary: z.string().max(3000).default(""),
+  playerProgress: z.string().max(5000).default(""),
+  pitchNotes: z.string().max(3000).default(""),
+});
+
+export async function submitSessionReport(me: Me, input: z.infer<typeof sessionReportInput>) {
+  requireStaff(me);
+  const s = await one(
+    `SELECT s.intramural_id AS "intramuralId", s.date, i.name FROM sessions s JOIN intramurals i ON i.id = s.intramural_id WHERE s.id = $1`,
+    [input.sessionId],
+  );
+  if (!s) throw new HttpError(404, "That session does not exist");
+  await requirePermission(me, "mentorship.write", s.intramuralId);
+  if (!input.attendanceSummary && !input.playerProgress && !input.pitchNotes) throw new HttpError(400, "Write at least one note for the admins");
+  const row = await one(
+    `INSERT INTO session_reports (session_id, coach_id, age_group, present_count, roster_count, attendance_summary, player_progress, pitch_notes, client_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (client_id) DO NOTHING RETURNING id`,
+    [input.sessionId, me.id, input.ageGroup, input.presentCount, input.rosterCount, input.attendanceSummary, input.playerProgress, input.pitchNotes, input.clientId ?? null],
+  );
+  if (row) {
+    await notify((await allAdmins()).filter((id) => id !== me.id), {
+      kind: "general",
+      title: `Session report: ${s.name}${input.ageGroup ? ` ${input.ageGroup}` : ""}, ${s.date}`,
+      body: `${me.name}: ${input.presentCount}/${input.rosterCount} present. ${input.attendanceSummary}`.trim(),
+      link: `/i/${s.intramuralId}/reports`,
+    });
+  }
+  return { id: row?.id ?? null, duplicate: !row };
+}

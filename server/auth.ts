@@ -7,9 +7,8 @@ import { one, query } from "./db.js";
  * Who may do what.
  *
  * Four roles:
- * - super_admin: everything, everywhere. The only role that sees Creator Control.
- * - admin: their country and their assigned intramurals, with the permissions a
- *   super admin has ticked for them.
+ * - super_admin and admin: everything, everywhere, including Creator Control.
+ *   They are equal; `isSuperAdmin` is true for both (an active admin).
  * - coach: their country and assigned intramurals; the coach basics, plus any
  *   field privileges an admin has granted.
  * - parent: only their own verified children, and those children's intramurals.
@@ -129,7 +128,11 @@ export async function loadMe(userId: number): Promise<(Me & { tokenVersion: numb
     [userId],
   );
   if (!row) return null;
-  const isSuperAdmin = row.role === "super_admin" || isCreatorEmail(row.email);
+  const isRealSuperAdmin = row.role === "super_admin" || isCreatorEmail(row.email);
+  // Admins and Super Admins have exactly the same powers, across every school
+  // and club (Nov 2026 decision). `isSuperAdmin` therefore means "full access":
+  // true for any active admin. Only the stored role label differs.
+  const isSuperAdmin = isRealSuperAdmin || (row.role === "admin" && row.status === "active");
   const [assigned, grants, kids] = await Promise.all([
     query<{ id: number }>(`SELECT intramural_id AS id FROM user_intramurals WHERE user_id = $1`, [userId]),
     query<Grant>(
@@ -148,9 +151,9 @@ export async function loadMe(userId: number): Promise<(Me & { tokenVersion: numb
   ]);
   return {
     ...row,
-    role: isSuperAdmin ? "super_admin" : row.role,
+    role: isRealSuperAdmin ? "super_admin" : row.role,
     isSuperAdmin,
-    status: isSuperAdmin ? "active" : row.status,
+    status: isRealSuperAdmin ? "active" : row.status,
     intramurals: assigned.map((a) => a.id),
     grants,
     children: kids.map((k) => k.id),
@@ -239,8 +242,9 @@ export function requireStaff(user: Me): void {
   if (user.status !== "active") throw new HttpError(403, "Your account is waiting for approval");
 }
 
+/** Creator Control and other full-access actions: Admins and Super Admins (they are equal). */
 export function requireSuperAdmin(user: Me): void {
-  if (!user.isSuperAdmin) throw new HttpError(403, "Only a Super Admin can do this");
+  if (!user.isSuperAdmin) throw new HttpError(403, "Only an Admin or Super Admin can do this");
 }
 
 /**

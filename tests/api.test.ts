@@ -55,9 +55,9 @@ beforeAll(async () => {
   await api().put(`/api/creator/users/${ugCoach.id}/intramurals`).set(auth(creator)).send({ intramuralIds: [kampala] }).expect(200);
 
   childId = (await api().post(`/api/intramurals/${rafiki}/players`).set(auth(admin))
-    .send({ firstName: "amani", lastName: "otieno", category: "Under 9", guardianEmail: "Parent@Test.org", guardianPhone: "0711 111 111" })).body.id;
+    .send({ firstName: "amani", lastName: "otieno", category: "U9", guardianEmail: "Parent@Test.org", guardianPhone: "0711 111 111" })).body.id;
   otherChildId = (await api().post(`/api/intramurals/${rafiki}/players`).set(auth(admin))
-    .send({ firstName: "baraka", lastName: "kip", category: "Under 9", guardianEmail: "someone@else.org" })).body.id;
+    .send({ firstName: "baraka", lastName: "kip", category: "U9", guardianEmail: "someone@else.org" })).body.id;
 
   parent = await signup({ countryId: KE, role: "parent", name: "grace otieno", email: "parent@test.org", phone: "+254711111111", password: "password1" });
   strangerParent = await signup({ countryId: KE, role: "parent", name: "eve", email: "eve@test.org", phone: "0722999999", password: "password1" });
@@ -110,12 +110,14 @@ describe("accounts", () => {
 });
 
 describe("RBAC", () => {
-  it("hides Creator Control from admins, coaches and parents", async () => {
-    for (const who of [admin, coach, parent]) {
+  it("Creator Control: open to admins and super admins, hidden from coaches and parents", async () => {
+    for (const who of [coach, parent]) {
       expect((await api().get("/api/creator/users").set(auth(who))).status).toBe(403);
-      expect((await api().get("/api/creator/metrics").set(auth(who))).status).toBe(403);
+      expect((await api().get("/api/creator/parents").set(auth(who))).status).toBe(403);
     }
     expect((await api().get("/api/creator/users").set(auth(creator))).status).toBe(200);
+    expect((await api().get("/api/creator/users").set(auth(admin))).status).toBe(200);
+    expect((await api().get("/api/creator/metrics").set(auth(admin))).status).toBe(200);
   });
 
   it("restricts coaches to their assigned intramurals", async () => {
@@ -134,8 +136,10 @@ describe("RBAC", () => {
     expect((await api().get(`/api/intramurals/${kampala}`).set(auth(coach))).status).toBe(200);
     await api().put(`/api/creator/users/${coach.id}/permissions`).set(auth(creator)).send({ permissions: [] }).expect(200);
     await api().put(`/api/creator/users/${coach.id}/intramurals`).set(auth(creator)).send({ intramuralIds: [rafiki] }).expect(200);
-    // An admin cannot pull in a coach from another country.
-    expect((await api().post(`/api/intramurals/${rafiki}/coaches`).set(auth(admin)).send({ userId: ugCoach.id })).status).toBe(403);
+    // Admins have the same reach as super admins: every school, every country.
+    expect((await api().get(`/api/intramurals/${kampala}`).set(auth(admin))).status).toBe(200);
+    expect((await api().post(`/api/intramurals/${rafiki}/coaches`).set(auth(admin)).send({ userId: ugCoach.id })).status).toBe(200);
+    await api().delete(`/api/intramurals/${rafiki}/coaches/${ugCoach.id}`).set(auth(admin)).expect(200);
   });
 
   it("coaches cannot take attendance or register players until an admin grants it", async () => {
@@ -155,17 +159,17 @@ describe("RBAC", () => {
     expect(bad.status).toBe(400);
   });
 
-  it("an admin's permissions follow the super admin's checkboxes", async () => {
-    await api().put(`/api/creator/users/${admin.id}/permissions`).set(auth(creator)).send({ permissions: ["schedules.edit"] }).expect(200);
-    expect((await api().patch(`/api/intramurals/${rafiki}`).set(auth(admin)).send({ location: "Rafiki Field" })).status).toBe(200);
+  it("admins and super admins have exactly the same powers", async () => {
+    // Even with every checkbox cleared, an admin can still do everything.
+    await api().put(`/api/creator/users/${admin.id}/permissions`).set(auth(creator)).send({ permissions: [] }).expect(200);
+    expect((await api().patch(`/api/intramurals/${daniels}`).set(auth(admin)).send({ location: "Daniels Field" })).status).toBe(200);
+    await api().patch(`/api/intramurals/${rafiki}`).set(auth(admin)).send({ location: "Rafiki Field" }).expect(200);
     expect((await api().put(`/api/intramurals/${rafiki}/airtable`).set(auth(admin))
-      .send({ formUrl: "", baseId: "", tableName: "", viewName: "", pushWalkIns: false, fieldMap: {} })).status).toBe(403);
-    // An admin cannot grant what they no longer hold.
-    expect((await api().put(`/api/intramurals/${rafiki}/coaches/${coach.id}/privileges`).set(auth(admin)).send({ privileges: [] })).status).toBe(403);
-    // Restore all.
-    await api().put(`/api/creator/users/${admin.id}/permissions`).set(auth(creator))
-      .send({ permissions: ["schedules.edit", "players.register", "roles.assign", "airtable.manage", "parents.approve", "attendance.take", "equipment.check", "payments.manage", "reports.generate", "privileges.grant"] })
-      .expect(200);
+      .send({ formUrl: "https://airtable.com/appQFwbjGiTPwZQxc/shr1ZecAArGDFOWSQ", baseId: "", tableName: "", viewName: "", pushWalkIns: false, fieldMap: {} })).status).toBe(200);
+    expect((await api().get(`/api/intramurals/${daniels}/players`).set(auth(admin))).status).toBe(200);
+    expect((await api().put(`/api/intramurals/${rafiki}/coaches/${coach.id}/privileges`).set(auth(admin)).send({ privileges: [{ permission: "attendance.take" }, { permission: "players.register" }] })).status).toBe(200);
+    const list = (await api().get("/api/intramurals").set(auth(admin))).body;
+    expect(list.length).toBe((await api().get("/api/intramurals").set(auth(creator))).body.length);
   });
 });
 
@@ -349,6 +353,109 @@ describe("reports", () => {
     const { writeFileSync, mkdirSync } = await import("node:fs");
     mkdirSync("tmp", { recursive: true });
     writeFileSync("tmp/sample-report.pdf", res.body as Buffer);
+  });
+});
+
+describe("Nov 2026 updates", () => {
+  it("admins create parent accounts with linked children and temporary passwords", async () => {
+    const created = await api().post("/api/creator/parents").set(auth(admin))
+      .send({ name: "wanjiru kamau", email: "Wanjiru@Test.org", phone: "0744 555 666", playerIds: [otherChildId], password: "welcome2026" });
+    expect(created.status).toBe(201);
+    expect(created.body.temporaryPassword).toBe("welcome2026");
+    const login = await api().post("/api/auth/login").send({ identifier: "0744555666", password: "welcome2026" });
+    expect(login.status).toBe(200);
+    expect(login.body.me.mustChangePassword).toBe(true);
+    expect(login.body.me.children).toEqual([otherChildId]);
+    const parents = (await api().get("/api/creator/parents").set(auth(admin))).body;
+    expect(parents.find((p: { email: string }) => p.email === "wanjiru@test.org").name).toBe("Wanjiru Kamau");
+    // Staff list and parents list never mix.
+    const staff = (await api().get("/api/creator/users?kind=staff").set(auth(admin))).body;
+    expect(staff.some((u: { role: string }) => u.role === "parent")).toBe(false);
+    // Reset to a generated temporary password.
+    const reset = await api().post(`/api/creator/users/${created.body.id}/password`).set(auth(admin)).send({});
+    expect(reset.body.temporaryPassword.length).toBeGreaterThanOrEqual(8);
+    expect((await api().post("/api/auth/login").send({ identifier: "0744555666", password: "welcome2026" })).status).toBe(401);
+  });
+
+  it("assigns coaches to schools and age groups; their Players tab follows", async () => {
+    await api().put(`/api/creator/users/${otherCoach.id}/assignments`).set(auth(admin))
+      .send({ assignments: [{ intramuralId: rafiki, ageGroups: ["U9"] }, { intramuralId: daniels, ageGroups: [] }] }).expect(200);
+    const me = (await api().get("/api/me").set(auth(otherCoach))).body;
+    expect(me.intramurals.sort()).toEqual([rafiki, daniels].sort());
+    const detail = (await api().get(`/api/intramurals/${rafiki}`).set(auth(otherCoach))).body;
+    expect(detail.myAgeGroups).toEqual(["U9"]);
+    const mine = (await api().get(`/api/intramurals/${rafiki}/players?mine=1`).set(auth(otherCoach))).body;
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine.every((p: { category: string }) => p.category === "U9")).toBe(true);
+    await api().put(`/api/intramurals/${rafiki}/coaches/${otherCoach.id}/age-groups`).set(auth(admin)).send({ ageGroups: ["U11", "U13"] }).expect(200);
+    expect((await api().get(`/api/intramurals/${rafiki}`).set(auth(otherCoach))).body.myAgeGroups).toEqual(["U11", "U13"]);
+  });
+
+  it("birth year puts a player in the right age group", async () => {
+    const year = new Date().getFullYear();
+    const r = await api().post(`/api/intramurals/${rafiki}/players`).set(auth(admin)).send({ firstName: "kioko", lastName: "mwende", birthYear: year - 10 });
+    const p = (await api().get(`/api/intramurals/${rafiki}/players?q=kioko`).set(auth(admin))).body[0];
+    expect(p.id).toBe(r.body.id);
+    expect(p.birthYear).toBe(year - 10);
+    expect(p.category).toBe("U11");
+  });
+
+  it("only Rafiki (school mode) uses the Virtue Teams; clubs run camps", async () => {
+    const list = (await api().get("/api/intramurals").set(auth(creator))).body;
+    const rafikiRow = list.find((i: { id: number }) => i.id === rafiki);
+    expect(rafikiRow.programMode).toBe("school");
+    expect(rafikiRow.teams.length).toBe(4);
+    const rosslynRow = list.find((i: { slug: string }) => i.slug === "rosslyn");
+    expect(rosslynRow.programMode).toBe("club");
+    expect(rosslynRow.teams).toEqual([]);
+    const camp = await api().post(`/api/intramurals/${rosslynRow.id}/sessions`).set(auth(admin))
+      .send({ kind: "camp", title: "Summer Camp", date: "2026-12-16", endDate: "2026-12-18", startTime: "09:00", endTime: "15:00" });
+    expect(camp.status).toBe(201);
+    const s = (await api().get(`/api/sessions/${camp.body.id}`).set(auth(creator))).body;
+    expect(s.kind).toBe("camp");
+    expect(s.endDate).toBe("2026-12-18");
+  });
+
+  it("coaches send post-session reports to admins (also offline)", async () => {
+    const r = await api().post(`/api/sessions/${sessionId}/reports`).set(auth(coach))
+      .send({ ageGroup: "U9", presentCount: 5, rosterCount: 6, attendanceSummary: "Good turnout", pitchNotes: "Muddy goal mouth" });
+    expect(r.status).toBe(201);
+    const sync = (await api().post("/api/sync").set(auth(coach)).send({ ops: [{ id: "op-report-0000001", type: "session_report", payload: { sessionId, playerProgress: "Offline note" } }] })).body;
+    expect(sync.results[0].ok).toBe(true);
+    const adminView = (await api().get(`/api/intramurals/${rafiki}/reports`).set(auth(admin))).body;
+    expect(adminView.length).toBe(2);
+    const notes = (await api().get("/api/notifications").set(auth(admin))).body;
+    expect(notes.some((n: { title: string }) => n.title.startsWith("Session report"))).toBe(true);
+    expect((await api().get(`/api/intramurals/${rafiki}/reports`).set(auth(parent))).status).toBe(403);
+  });
+
+  it("emergency info: medical notes and parent numbers, for staff only", async () => {
+    await api().patch(`/api/players/${childId}`).set(auth(admin)).send({ medicalNotes: "Asthma: inhaler in bag" }).expect(200);
+    const e = (await api().get(`/api/players/${childId}/emergency`).set(auth(coach))).body;
+    expect(e.medicalNotes).toMatch(/inhaler/);
+    expect(e.contacts[0].phone).toBe("+254711111111");
+    expect((await api().get(`/api/players/${childId}/emergency`).set(auth(parent))).status).toBe(403);
+    expect((await api().get(`/api/players/${childId}/emergency`).set(auth(ugCoach))).status).toBe(403);
+  });
+
+  it("unpaid alerts reach the parent and can be cleared", async () => {
+    expect((await api().post("/api/unpaid-alerts").set(auth(coach)).send({ playerIds: [childId], title: "Summer Camp" })).status).toBe(403);
+    await api().post("/api/unpaid-alerts").set(auth(admin)).send({ playerIds: [childId], title: "Summer Camp", amount: 2500, note: "Due Friday" }).expect(201);
+    const kids = (await api().get("/api/parent/children").set(auth(parent))).body.children;
+    expect(kids.find((k: { id: number }) => k.id === childId).unpaidAlerts).toBe(1);
+    const mine = (await api().get(`/api/players/${childId}/unpaid-alerts`).set(auth(parent))).body;
+    expect(mine[0].title).toBe("Summer Camp");
+    expect((await api().get(`/api/players/${otherChildId}/unpaid-alerts`).set(auth(parent))).status).toBe(403);
+    const open = (await api().get(`/api/intramurals/${rafiki}/unpaid-alerts`).set(auth(admin))).body;
+    await api().post(`/api/unpaid-alerts/${open[0].id}/resolve`).set(auth(admin)).expect(200);
+    expect((await api().get("/api/parent/children").set(auth(parent))).body.children.find((k: { id: number }) => k.id === childId).unpaidAlerts).toBe(0);
+  });
+
+  it("parents can see every school's registration form (public details only)", async () => {
+    const programs = (await api().get("/api/parent/programs").set(auth(parent))).body;
+    expect(programs.find((p: { mine: boolean }) => p.mine).id).toBe(rafiki);
+    expect(programs.find((p: { slug?: string; name: string }) => p.name === "Rosslyn Academy").formUrl).toMatch(/airtable\.com/);
+    expect(programs[0].players).toBeUndefined();
   });
 });
 

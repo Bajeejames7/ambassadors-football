@@ -310,3 +310,84 @@ paymentRoutes.get("/intramurals/:id/payments", async (req, res) => {
   ]);
   res.json({ balances: balances.map((b) => ({ ...b, balance: b.charged - b.paid })), recent });
 });
+
+// ---- unpaid session / camp alerts ---------------------------------------------------------
+
+const unpaidInput = z.object({
+  playerIds: z.array(z.number().int()).min(1).max(500),
+  sessionId: z.number().int().nullable().optional(),
+  title: z.string().trim().min(2, "Say what is unpaid, e.g. Summer Camp").max(120),
+  amount: z.number().positive().max(10_000_000).nullable().optional(),
+  note: z.string().max(500).default(""),
+});
+
+/** Admin marks one or more players unpaid for a session or camp; their parents get an urgent alert. */
+paymentRoutes.post("/unpaid-alerts", async (req, res) => {
+  const user = me(req);
+  const input = unpaidInput.parse(req.body);
+  const players = await query<{ id: number; intramuralId: number; firstName: string; formUrl: string | null; currency: string }>(
+    `SELECT p.id, p.intramural_id AS "intramuralId", p.first_name AS "firstName", a.form_url AS "formUrl", c.currency
+       FROM players p JOIN intramurals i ON i.id = p.intramural_id JOIN countries c ON c.id = i.country_id
+       LEFT JOIN airtable_configs a ON a.intramural_id = p.intramural_id WHERE p.id = ANY($1)`,
+    [input.playerIds],
+  );
+  if (players.length !== input.playerIds.length) throw new HttpError(404, "One of those players does not exist");
+  for (const p of players) await requirePermission(user, "payments.manage", p.intramuralId);
+  let created = 0;
+  for (const p of players) {
+    await query(
+      `INSERT INTO unpaid_alerts (player_id, session_id, title, amount, note, created_by) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [p.id, input.sessionId ?? null, input.title, input.amount ?? null, input.note, user.id],
+    );
+    created += 1;
+    await notify(await parentsOf(p.id), {
+      kind: "payment",
+      urgent: true,
+      title: `Unpaid: ${input.title} for ${p.firstName}${input.amount ? ` (${p.currency} ${input.amount.toLocaleString()})` : ""}`,
+      body: [input.note, p.formUrl ? "Pay through the registration form in the app." : ""].filter(Boolean).join("\n"),
+      link: `/child/${p.id}`,
+    });
+  }
+  await audit(user.id, "unpaid_alerts", { playerIds: input.playerIds, title: input.title, amount: input.amount });
+  res.status(201).json({ created });
+});
+
+paymentRoutes.get("/players/:id/unpaid-alerts", async (req, res) => {
+  const user = me(req);
+  const p = await requirePlayer(user, Number(req.params.id));
+  if (user.role !== "parent" && !can(user, "payments.manage", p.ref)) throw new HttpError(403, "Not allowed");
+  res.json(
+    await query(
+      `SELECT a.id, a.title, a.amount, a.note, a.created_at AS "createdAt", a.resolved_at AS "resolvedAt",
+              s.date AS "sessionDate", s.kind AS "sessionKind"
+         FROM unpaid_alerts a LEFT JOIN sessions s ON s.id = a.session_id
+        WHERE a.player_id = $1 ORDER BY a.resolved_at IS NULL DESC, a.created_at DESC LIMIT 50`,
+      [p.id],
+    ),
+  );
+});
+
+/** Open unpaid alerts for a school (admin payments view). */
+paymentRoutes.get("/intramurals/:id/unpaid-alerts", async (req, res) => {
+  const user = me(req);
+  const id = Number(req.params.id);
+  await requirePermission(user, "payments.manage", id);
+  res.json(
+    await query(
+      `SELECT a.id, a.player_id AS "playerId", p.first_name || ' ' || p.last_name AS "playerName", p.category,
+              a.title, a.amount, a.note, a.created_at AS "createdAt"
+         FROM unpaid_alerts a JOIN players p ON p.id = a.player_id
+        WHERE p.intramural_id = $1 AND a.resolved_at IS NULL ORDER BY a.created_at DESC`,
+      [id],
+    ),
+  );
+});
+
+paymentRoutes.post("/unpaid-alerts/:id/resolve", async (req, res) => {
+  const user = me(req);
+  const a = await one(`SELECT a.player_id AS "playerId", p.intramural_id AS "intramuralId" FROM unpaid_alerts a JOIN players p ON p.id = a.player_id WHERE a.id = $1`, [Number(req.params.id)]);
+  if (!a) throw new HttpError(404, "Not found");
+  await requirePermission(user, "payments.manage", a.intramuralId);
+  await query(`UPDATE unpaid_alerts SET resolved_at = now(), resolved_by = $2 WHERE id = $1 AND resolved_at IS NULL`, [Number(req.params.id), user.id]);
+  res.json({ ok: true });
+});

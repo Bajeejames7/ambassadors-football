@@ -6,7 +6,7 @@ import { api, download, ApiError } from "../lib/api";
 import { cached, enqueue, useOffline } from "../lib/offline";
 import { useAuth } from "../lib/auth";
 import { useIntramural, useIntramurals, useUpcoming, type Intramural, type Session } from "../lib/queries";
-import { longDate, shortDate, time12, WEEKDAYS } from "../lib/format";
+import { dateRange, longDate, sessionLabel, shortDate, time12, WEEKDAYS } from "../lib/format";
 import { Crest, Empty, ErrorNote, FixtureBoard, Modal, Notice, PageTitle, PendingBadge, SectionTitle, Spinner } from "../components/ui";
 
 export function StaffHome() {
@@ -18,7 +18,7 @@ export function StaffHome() {
   const first = me!.name.split(" ")[0];
   return (
     <>
-      <PageTitle title={`Hello, ${first}`} sub={me!.isSuperAdmin ? "Super Admin · every country" : me!.role === "admin" ? "Coordinator" : "Coach"} />
+      <PageTitle banner title={`Hello, ${first}`} sub={me!.role === "super_admin" ? "Super Admin · every school and club" : me!.role === "admin" ? "Admin · every school and club" : "Coach"} />
       {items.length === 0 ? (
         <div className="sheet">
           <h2 className="condensed text-xl text-navy">You're not on a team yet</h2>
@@ -84,7 +84,7 @@ export function SchedulePage() {
                     <span className="w-1.5 shrink-0 rounded-full" style={{ background: s.color }} aria-hidden />
                     <div className="min-w-0 flex-1">
                       <p className="font-bold text-navy">
-                        {s.intramuralName} · {s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.kind === "tournament" ? s.title || "Tournament" : `${s.dayLabel} session`}
+                        {s.intramuralName} · {sessionLabel(s)}{s.endDate && s.endDate > s.date ? ` (${dateRange(s.date, s.endDate)})` : ""}
                         {s.cancelled && <span className="chip ml-2 bg-bad text-white">Cancelled</span>}
                       </p>
                       <p className="display mt-1 text-xl text-navy">{s.timeLabel}</p>
@@ -296,8 +296,8 @@ export function SessionsTab({ i }: { i: Intramural }) {
           <p className="display text-3xl text-navy">{s.date.slice(8)}</p>
         </div>
         <div className="min-w-0 flex-1">
-          <p className="font-bold text-navy">{s.kind === "training" ? `${s.dayLabel} session` : s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.title || "Tournament"}</p>
-          <p className="text-sm text-slate">{s.timeLabel}{s.cancelled ? " · Cancelled" : ""}</p>
+          <p className="font-bold text-navy">{sessionLabel(s)}{s.kind === "camp" || s.kind === "clinic" ? <span className="chip ml-2 bg-warn/15 text-warn">{s.kind === "camp" ? "Camp" : "Clinic"}</span> : null}</p>
+          <p className="text-sm text-slate">{s.endDate && s.endDate > s.date ? `${dateRange(s.date, s.endDate)} · ` : ""}{s.timeLabel}{s.cancelled ? " · Cancelled" : ""}</p>
         </div>
         {s.myAnswer === undefined || s.myAnswer ? null : <span className="chip bg-brand/10 text-brand">Answer poll</span>}
         <ChevronRight className="h-5 w-5 text-slate" aria-hidden />
@@ -307,7 +307,7 @@ export function SessionsTab({ i }: { i: Intramural }) {
   return (
     <>
       {i.myPermissions.includes("schedules.edit") && (
-        <button className="btn-ghost mb-3" onClick={() => setAdding(true)}><CalendarPlus className="h-4 w-4" /> Add match or tournament</button>
+        <button className="btn-ghost mb-3" onClick={() => setAdding(true)}><CalendarPlus className="h-4 w-4" /> {i.programMode === "club" ? "Add an event, camp or match" : "Add match or tournament"}</button>
       )}
       <ul className="grid gap-3">{upcoming.map(row)}</ul>
       {past.length > 0 && (
@@ -322,30 +322,33 @@ export function SessionsTab({ i }: { i: Intramural }) {
 }
 
 function AddFixture({ i, onClose, onSaved }: { i: Intramural; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState({ kind: "match", date: "", title: "", opponent: "", startTime: i.sessionStart, endTime: i.sessionEnd, location: i.location, dressCode: i.dressCode, travelNotes: "" });
+  const [f, setF] = useState({ kind: i.programMode === "club" ? "camp" : "match", date: "", endDate: "", title: "", opponent: "", startTime: i.sessionStart, endTime: i.sessionEnd, location: i.location, dressCode: i.dressCode, travelNotes: "" });
   const [error, setError] = useState("");
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api(`/intramurals/${i.id}/sessions`, { method: "POST", body: f });
+      await api(`/intramurals/${i.id}/sessions`, { method: "POST", body: { ...f, endDate: f.kind === "camp" && f.endDate ? f.endDate : null } });
       onSaved();
     } catch (err) {
       setError((err as Error).message);
     }
   };
   return (
-    <Modal open onClose={onClose} title="Add a fixture">
+    <Modal open onClose={onClose} title={i.programMode === "club" ? "Add an event or camp" : "Add a fixture"}>
       <form onSubmit={save} className="grid gap-3">
         <div className="grid grid-cols-2 gap-2">
-          {(["match", "tournament", "training"] as const).map((k) => (
+          {((i.programMode === "club" ? ["camp", "clinic", "tournament", "match", "training"] : ["match", "tournament", "training"]) as ("camp" | "clinic" | "match" | "tournament" | "training")[]).map((k) => (
             <button type="button" key={k} onClick={() => setF({ ...f, kind: k })} className={`rounded-xl px-3 py-2 text-sm font-semibold ring-1 ${f.kind === k ? "bg-navy text-white ring-navy" : "ring-line"}`}>
               {k === "training" ? "Extra training" : k[0].toUpperCase() + k.slice(1)}
             </button>
           ))}
         </div>
-        <div><label className="label" htmlFor="fd">Date</label><input id="fd" type="date" className="field" required value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
+        <div className={f.kind === "camp" ? "grid grid-cols-2 gap-3" : ""}>
+          <div><label className="label" htmlFor="fd">{f.kind === "camp" ? "First day" : "Date"}</label><input id="fd" type="date" className="field" required value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
+          {f.kind === "camp" && <div><label className="label" htmlFor="fed">Last day</label><input id="fed" type="date" className="field" min={f.date} value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></div>}
+        </div>
         {f.kind === "match" && <div><label className="label" htmlFor="fo">Opponent</label><input id="fo" className="field" value={f.opponent} onChange={(e) => setF({ ...f, opponent: e.target.value })} /></div>}
-        {f.kind === "tournament" && <div><label className="label" htmlFor="ft">Tournament name</label><input id="ft" className="field" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></div>}
+        {(f.kind === "tournament" || f.kind === "camp" || f.kind === "clinic") && <div><label className="label" htmlFor="ft">{f.kind === "camp" ? "Camp name (e.g. Summer Camp)" : f.kind === "clinic" ? "Clinic name" : "Tournament name"}</label><input id="ft" className="field" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></div>}
         <div className="grid grid-cols-2 gap-3">
           <div><label className="label" htmlFor="fs">Starts</label><input id="fs" type="time" className="field" value={f.startTime} onChange={(e) => setF({ ...f, startTime: e.target.value })} /><p className="mt-1 text-xs text-slate">{time12(f.startTime)}</p></div>
           <div><label className="label" htmlFor="fe">Ends</label><input id="fe" type="time" className="field" value={f.endTime} onChange={(e) => setF({ ...f, endTime: e.target.value })} /><p className="mt-1 text-xs text-slate">{time12(f.endTime)}</p></div>

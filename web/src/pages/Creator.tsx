@@ -1,27 +1,39 @@
 import { useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { Eye, Globe2, KeyRound, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { dateTime12, money, PERMISSION_LABELS, WEEKDAYS } from "../lib/format";
+import { AGE_GROUPS, dateTime12, money, WEEKDAYS } from "../lib/format";
 import { Empty, ErrorNote, Modal, NameInput, Notice, PageTitle, Spinner, Tabs } from "../components/ui";
+import { ChildDashboard, type Child } from "./Parent";
 
-const ADMIN_PERMS = ["schedules.edit", "players.register", "roles.assign", "airtable.manage", "parents.approve", "attendance.take", "equipment.check", "payments.manage", "reports.generate", "privileges.grant"];
 const ROLE_LABEL: Record<string, string> = { super_admin: "Super Admin", admin: "Admin", coach: "Coach", parent: "Parent" };
+type Tab = "staff" | "parents" | "places" | "impact" | "audit";
 
-/** Creator Control: Super Admins only (the server refuses everyone else). */
+/**
+ * Creator Control: Admins and Super Admins (equal powers).
+ * Staff & Coaches and Parents are separate tabs, so the two never mix.
+ */
 export function CreatorControl() {
   const { me } = useAuth();
-  const [tab, setTab] = useState<"people" | "impact" | "places" | "audit">("people");
-  if (!me?.isSuperAdmin) return <ErrorNote error={new Error("Creator Control is only for Super Admins.")} />;
+  const { tab } = useParams();
+  const nav = useNavigate();
+  if (!me?.isSuperAdmin) return <ErrorNote error={new Error("Creator Control is for Admins and Super Admins.")} />;
+  const current = (["staff", "parents", "places", "impact", "audit"].includes(tab ?? "") ? tab : "staff") as Tab;
   return (
     <>
-      <PageTitle title="Creator Control" sub="People, permissions and countries across Ambassadors Football." />
-      <Tabs tabs={[{ id: "people", label: "People & permissions" }, { id: "impact", label: "International impact" }, { id: "places", label: "Countries & schools" }, { id: "audit", label: "Activity log" }]} value={tab} onChange={setTab} />
-      {tab === "people" && <People />}
-      {tab === "impact" && <Impact />}
-      {tab === "places" && <Places />}
-      {tab === "audit" && <Audit />}
+      <PageTitle banner title="Creator Control" sub="Staff, coaches, parents and schools across Ambassadors Football." />
+      <Tabs
+        tabs={[{ id: "staff", label: "Staff & Coaches" }, { id: "parents", label: "Parents" }, { id: "places", label: "Countries & schools" }, { id: "impact", label: "Impact" }, { id: "audit", label: "Activity log" }]}
+        value={current}
+        onChange={(t) => nav(`/creator/${t}`, { replace: true })}
+      />
+      {current === "staff" && <Staff />}
+      {current === "parents" && <Parents />}
+      {current === "places" && <Places />}
+      {current === "impact" && <Impact />}
+      {current === "audit" && <Audit />}
     </>
   );
 }
@@ -33,27 +45,28 @@ function useAllIntramurals() {
   return useQuery({ queryKey: ["intramurals"], queryFn: () => api<any[]>("/intramurals") });
 }
 
-function People() {
+// ---- Staff & Coaches ----------------------------------------------------------------------
+
+function Staff() {
   const qc = useQueryClient();
-  const users = useQuery({ queryKey: ["creator-users"], queryFn: () => api<any[]>("/creator/users") });
-  const countries = useCountries();
+  const users = useQuery({ queryKey: ["creator-users", "staff"], queryFn: () => api<any[]>("/creator/users?kind=staff") });
+  const intramurals = useAllIntramurals();
   const [q, setQ] = useState("");
   const [role, setRole] = useState("");
-  const [country, setCountry] = useState("");
   const [open, setOpen] = useState<any | null>(null);
   const [creating, setCreating] = useState(false);
+  const names = new Map((intramurals.data ?? []).map((i) => [i.id, i.shortCode ?? i.name]));
   const list = useMemo(() => (users.data ?? []).filter((u) =>
-    (!role || u.role === role) && (!country || String(u.countryId) === country) &&
-    `${u.name} ${u.email} ${u.phone ?? ""}`.toLowerCase().includes(q.toLowerCase())), [users.data, q, role, country]);
+    (!role || u.role === role) && `${u.name} ${u.email} ${u.phone ?? ""}`.toLowerCase().includes(q.toLowerCase())), [users.data, q, role]);
   if (users.isLoading) return <Spinner />;
   if (users.error) return <ErrorNote error={users.error} />;
   return (
     <>
-      <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
-        <div className="relative"><Search className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-slate" aria-hidden /><input className="field pl-10" placeholder="Search name, email or phone" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search people" /></div>
-        <select className="field" value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role"><option value="">All roles</option>{Object.entries(ROLE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-        <select className="field" value={country} onChange={(e) => setCountry(e.target.value)} aria-label="Country"><option value="">All countries</option>{(countries.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-        <button className="btn-primary" onClick={() => setCreating(true)}><UserPlus className="h-4 w-4" /> Add person</button>
+      <p className="mb-3 rounded-xl bg-white p-3 text-sm text-slate ring-1 ring-line"><ShieldCheck className="mr-1 inline h-4 w-4" /> Admins and Super Admins have exactly the same powers in every school and club.</p>
+      <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+        <div className="relative"><Search className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-slate" aria-hidden /><input className="field pl-10" placeholder="Search name, email or phone" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search staff" /></div>
+        <select className="field" value={role} onChange={(e) => setRole(e.target.value)} aria-label="Role"><option value="">All roles</option><option value="super_admin">Super Admin</option><option value="admin">Admin</option><option value="coach">Coach</option></select>
+        <button className="btn-primary" onClick={() => setCreating(true)}><UserPlus className="h-4 w-4" /> Add a person</button>
       </div>
       <ul className="sheet divide-y divide-line py-1">
         {list.map((u) => (
@@ -61,7 +74,11 @@ function People() {
             <button className="flex w-full items-center gap-3 py-2.5 text-left" onClick={() => setOpen(u)}>
               <div className="min-w-0 flex-1">
                 <p className="truncate font-bold text-navy">{u.name}</p>
-                <p className="truncate text-sm text-slate">{u.email} · {u.country ?? "No country"}</p>
+                <p className="truncate text-sm text-slate">
+                  {u.email}
+                  {u.role === "coach" && u.assignments.length > 0 && ` · ${u.assignments.map((a: any) => `${names.get(a.intramuralId) ?? "?"}${a.ageGroups.length ? ` ${a.ageGroups.join("/")}` : ""}`).join(", ")}`}
+                  {u.role === "coach" && u.assignments.length === 0 && " · not assigned yet"}
+                </p>
               </div>
               {u.status !== "active" && <span className={`chip ${u.status === "pending" ? "bg-warn/15 text-warn" : "bg-bad/10 text-bad"}`}>{u.status}</span>}
               <span className={`chip ${u.role === "super_admin" ? "bg-navy text-white" : u.role === "admin" ? "bg-brand/10 text-brand" : "bg-page text-slate"}`}>{ROLE_LABEL[u.role]}</span>
@@ -70,22 +87,58 @@ function People() {
         ))}
         {list.length === 0 && <li className="py-3 text-slate">Nobody matches.</li>}
       </ul>
-      {open && <UserEditor user={open} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); void qc.invalidateQueries({ queryKey: ["creator-users"] }); }} />}
-      {creating && <CreateUser onClose={() => setCreating(false)} onSaved={() => void qc.invalidateQueries({ queryKey: ["creator-users"] })} />}
+      {open && <StaffEditor user={open} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); void qc.invalidateQueries({ queryKey: ["creator-users"] }); }} />}
+      {creating && <CreatePerson kind="staff" onClose={() => setCreating(false)} onSaved={() => void qc.invalidateQueries({ queryKey: ["creator-users"] })} />}
     </>
   );
 }
 
-function UserEditor({ user, onClose, onSaved }: { user: any; onClose: () => void; onSaved: () => void }) {
+/** Pick schools/clubs and, for each, the age groups (none ticked = all ages). */
+export function AssignmentPicker({ value, onChange, intramurals }: {
+  value: { intramuralId: number; ageGroups: string[] }[];
+  onChange: (v: { intramuralId: number; ageGroups: string[] }[]) => void;
+  intramurals: any[];
+}) {
+  const byId = new Map(value.map((a) => [a.intramuralId, a]));
+  return (
+    <div className="grid gap-2">
+      {intramurals.map((i) => {
+        const a = byId.get(i.id);
+        return (
+          <div key={i.id} className={`rounded-xl p-3 ring-1 ${a ? "bg-brand/5 ring-brand/40" : "ring-line"}`}>
+            <label className="flex items-center gap-2 text-[15px] font-semibold">
+              <input type="checkbox" className="h-4 w-4" checked={!!a}
+                onChange={(e) => onChange(e.target.checked ? [...value, { intramuralId: i.id, ageGroups: [] }] : value.filter((x) => x.intramuralId !== i.id))} />
+              {i.name} <span className="text-xs font-normal text-slate">{i.countryName} · {WEEKDAYS[i.sessionWeekday]}s</span>
+            </label>
+            {a && (
+              <div className="mt-2 flex flex-wrap gap-1 pl-6" role="group" aria-label={`Age groups at ${i.name}`}>
+                {AGE_GROUPS.map((g) => {
+                  const on = a.ageGroups.includes(g);
+                  return (
+                    <button type="button" key={g} aria-pressed={on}
+                      onClick={() => onChange(value.map((x) => x.intramuralId === i.id ? { ...x, ageGroups: on ? x.ageGroups.filter((y) => y !== g) : [...x.ageGroups, g] } : x))}
+                      className={`rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${on ? "bg-navy text-white ring-navy" : "text-slate ring-line"}`}>{g}</button>
+                  );
+                })}
+                <span className="self-center pl-1 text-xs text-slate">{a.ageGroups.length ? "" : "All ages"}</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function StaffEditor({ user, onClose, onSaved }: { user: any; onClose: () => void; onSaved: () => void }) {
   const { me } = useAuth();
   const countries = useCountries();
   const intramurals = useAllIntramurals();
   const [role, setRole] = useState(user.role);
   const [status, setStatus] = useState(user.status);
   const [countryId, setCountryId] = useState(user.countryId ?? 0);
-  const accountWide = user.grants.filter((g: any) => g.intramuralId === null).map((g: any) => g.permission);
-  const [perms, setPerms] = useState<string[]>(accountWide);
-  const [assigned, setAssigned] = useState<number[]>(user.intramurals);
+  const [assignments, setAssignments] = useState<{ intramuralId: number; ageGroups: string[] }[]>(user.assignments ?? []);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const self = user.id === me!.id;
@@ -96,12 +149,7 @@ function UserEditor({ user, onClose, onSaved }: { user: any; onClose: () => void
       if (role !== user.role || status !== user.status || countryId !== user.countryId) {
         await api(`/creator/users/${user.id}`, { method: "PATCH", body: { ...(role !== user.role ? { role } : {}), ...(status !== user.status ? { status } : {}), ...(countryId && countryId !== user.countryId ? { countryId } : {}) } });
       }
-      if (role !== "parent") {
-        // A newly promoted admin gets every permission from the server; only send ticks for existing admins or the override.
-        const promoted = role === "admin" && user.role !== "admin";
-        if (!promoted) await api(`/creator/users/${user.id}/permissions`, { method: "PUT", body: { permissions: role === "admin" ? perms : perms.filter((p) => p === "country.override") } });
-        await api(`/creator/users/${user.id}/intramurals`, { method: "PUT", body: { intramuralIds: assigned } });
-      }
+      await api(`/creator/users/${user.id}/assignments`, { method: "PUT", body: { assignments } });
       onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -110,24 +158,22 @@ function UserEditor({ user, onClose, onSaved }: { user: any; onClose: () => void
     }
   };
   const remove = async () => {
-    if (!confirm(`Delete ${user.name}'s account? This cannot be undone.`)) return;
+    if (!confirm(`Remove ${user.name}'s account? This cannot be undone.`)) return;
     try { await api(`/creator/users/${user.id}`, { method: "DELETE" }); onSaved(); } catch (err) { setError((err as Error).message); }
   };
-  const byCountry = new Map<string, any[]>();
-  for (const i of intramurals.data ?? []) byCountry.set(i.countryName, [...(byCountry.get(i.countryName) ?? []), i]);
   return (
     <Modal open onClose={onClose} title={user.name}>
       <p className="-mt-2 mb-4 text-sm text-slate">{user.email}{user.phone ? ` · ${user.phone}` : ""}</p>
-      {user.isCreator && <p className="mb-3 rounded-xl bg-page p-3 text-sm text-slate"><ShieldCheck className="mr-1 inline h-4 w-4" />The creator account. Its role comes from CREATOR_EMAIL.</p>}
+      {user.isCreator && <p className="mb-3 rounded-xl bg-page p-3 text-sm text-slate"><ShieldCheck className="mr-1 inline h-4 w-4" />The founder's account. Its role can't be changed.</p>}
       <div className="grid gap-3">
         <div className="grid grid-cols-2 gap-3">
           <div><label className="label" htmlFor="ur">Role</label>
             <select id="ur" className="field" value={role} disabled={user.isCreator || self} onChange={(e) => setRole(e.target.value)}>
-              {Object.entries(ROLE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              <option value="super_admin">Super Admin</option><option value="admin">Admin</option><option value="coach">Coach</option>
             </select>
           </div>
           <div><label className="label" htmlFor="us">Status</label>
-            <select id="us" className="field" value={status} disabled={user.isCreator} onChange={(e) => setStatus(e.target.value)}>
+            <select id="us" className="field" value={status} disabled={user.isCreator || self} onChange={(e) => setStatus(e.target.value)}>
               <option value="active">Active</option><option value="pending">Pending</option><option value="suspended">Suspended</option>
             </select>
           </div>
@@ -137,87 +183,262 @@ function UserEditor({ user, onClose, onSaved }: { user: any; onClose: () => void
             {(countries.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
-
-        {role === "admin" && user.role === "admin" && (
-          <fieldset className="rounded-xl p-3 ring-1 ring-line">
-            <legend className="px-1 text-sm font-bold text-navy">What this admin can do</legend>
-            {ADMIN_PERMS.map((p) => (
-              <label key={p} className="flex items-center gap-2 py-1 text-[15px]">
-                <input type="checkbox" className="h-4 w-4" checked={perms.includes(p)} onChange={(e) => setPerms(e.target.checked ? [...perms, p] : perms.filter((x) => x !== p))} />
-                {PERMISSION_LABELS[p]}
-              </label>
-            ))}
+        {role === "coach" ? (
+          <fieldset>
+            <legend className="label">Coaches at</legend>
+            <AssignmentPicker value={assignments} onChange={setAssignments} intramurals={intramurals.data ?? []} />
           </fieldset>
-        )}
-        {role === "admin" && user.role !== "admin" && <p className="text-sm text-slate">New admins start with every permission. Open them again after saving to untick any.</p>}
-
-        {role !== "parent" && role !== "super_admin" && (
-          <>
-            <fieldset className="rounded-xl p-3 ring-1 ring-line">
-              <legend className="px-1 text-sm font-bold text-navy">Schools and clubs</legend>
-              {[...byCountry].map(([cn, list]) => (
-                <div key={cn} className="mt-1">
-                  <p className="text-xs font-semibold text-slate">{cn}{list[0].countryId !== countryId ? " (another country)" : ""}</p>
-                  {list.map((i) => (
-                    <label key={i.id} className="flex items-center gap-2 py-1 text-[15px]">
-                      <input type="checkbox" className="h-4 w-4" checked={assigned.includes(i.id)} onChange={(e) => setAssigned(e.target.checked ? [...assigned, i.id] : assigned.filter((x) => x !== i.id))} />
-                      {i.name} <span className="text-xs text-slate">{WEEKDAYS[i.sessionWeekday]}s</span>
-                    </label>
-                  ))}
-                </div>
-              ))}
-            </fieldset>
-            <label className="flex items-start gap-2 rounded-xl p-3 text-[15px] ring-1 ring-line">
-              <input type="checkbox" className="mt-1 h-4 w-4" checked={perms.includes("country.override")} onChange={(e) => setPerms(e.target.checked ? [...perms, "country.override"] : perms.filter((x) => x !== "country.override"))} />
-              <span><span className="font-semibold">Override country restriction</span><span className="block text-sm text-slate">Lets them work in assigned schools outside their own country.</span></span>
-            </label>
-          </>
+        ) : (
+          <p className="rounded-xl bg-page p-3 text-sm text-slate">{ROLE_LABEL[role]}s work across every school and club.</p>
         )}
         {error && <Notice tone="bad">{error}</Notice>}
         <button className="btn-primary" disabled={busy} onClick={save}>Save changes</button>
-        {!user.isCreator && !self && <button className="btn-ghost text-bad" onClick={remove}><Trash2 className="h-4 w-4" /> Delete account</button>}
+        <TempPassword userId={user.id} name={user.name} />
+        {!user.isCreator && !self && <button className="btn-ghost text-bad" onClick={remove}><Trash2 className="h-4 w-4" /> Remove</button>}
       </div>
     </Modal>
   );
 }
 
-function CreateUser({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+/** Set a temporary password (typed, or generated). The person chooses their own at next sign-in. */
+function TempPassword({ userId, name }: { userId: number; name: string }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const [result, setResult] = useState("");
+  const [error, setError] = useState("");
+  const submit = async () => {
+    setError("");
+    try {
+      const r = await api<{ temporaryPassword: string }>(`/creator/users/${userId}/password`, { method: "POST", body: value ? { password: value } : {} });
+      setResult(r.temporaryPassword);
+      setValue("");
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  if (!open) return <button className="btn-ghost" onClick={() => setOpen(true)}><KeyRound className="h-4 w-4" /> Set temporary password</button>;
+  return (
+    <div className="rounded-xl p-3 ring-1 ring-line">
+      {result ? (
+        <>
+          <p className="text-sm">New temporary password for {name.split(" ")[0]}. Share it privately; they'll choose their own when they sign in.</p>
+          <p className="display mt-2 select-all rounded-lg bg-page p-3 text-center text-2xl tracking-wide">{result}</p>
+        </>
+      ) : (
+        <>
+          <label className="label" htmlFor={`tp-${userId}`}>Temporary password</label>
+          <input id={`tp-${userId}`} className="field" placeholder="Leave empty to generate one" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" />
+          {error && <Notice tone="bad">{error}</Notice>}
+          <button className="btn-primary mt-2 w-full" onClick={submit}>Set password</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CreatePerson({ kind, onClose, onSaved }: { kind: "staff" | "parent"; onClose: () => void; onSaved: () => void }) {
   const countries = useCountries();
-  const [f, setF] = useState({ name: "", email: "", phone: "", role: "coach", countryId: 0 });
+  const intramurals = useAllIntramurals();
+  const [f, setF] = useState({ name: "", email: "", phone: "", role: "coach", countryId: 0, password: "" });
+  const [assignments, setAssignments] = useState<{ intramuralId: number; ageGroups: string[] }[]>([]);
+  const [children, setChildren] = useState<number[]>([]);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState("");
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
     try {
-      const r = await api<{ temporaryPassword: string }>("/creator/users", { method: "POST", body: { ...f, countryId: f.countryId || countries.data?.[0]?.id } });
-      setResult(r.temporaryPassword);
+      const countryId = f.countryId || countries.data?.[0]?.id;
+      if (kind === "parent") {
+        const r = await api<{ temporaryPassword: string }>("/creator/parents", { method: "POST", body: { name: f.name, email: f.email, phone: f.phone, countryId, password: f.password || undefined, playerIds: children } });
+        setResult(r.temporaryPassword);
+      } else {
+        const r = await api<{ id: number; temporaryPassword: string }>("/creator/users", { method: "POST", body: { name: f.name, email: f.email, phone: f.phone, role: f.role, countryId, password: f.password || undefined } });
+        if (f.role === "coach" && assignments.length) await api(`/creator/users/${r.id}/assignments`, { method: "PUT", body: { assignments } });
+        setResult(r.temporaryPassword);
+      }
       onSaved();
     } catch (err) {
       setError((err as Error).message);
     }
   };
   return (
-    <Modal open onClose={onClose} title="Add a person">
+    <Modal open onClose={onClose} title={kind === "parent" ? "Add a parent" : "Add a person"}>
       {result ? (
         <div className="grid gap-3">
-          <p className="text-[15px]">Account created. Share this temporary password with {f.name.split(" ")[0]} privately. They will choose their own when they first sign in.</p>
+          <p className="text-[15px]">Account created. Share this temporary password with {f.name.split(" ")[0]} privately. They'll choose their own when they first sign in.</p>
           <p className="display select-all rounded-xl bg-page p-4 text-center text-3xl tracking-wide">{result}</p>
+          <p className="text-sm text-slate">They sign in with {f.email} or their phone number.</p>
           <button className="btn-primary" onClick={onClose}>Done</button>
         </div>
       ) : (
         <form onSubmit={save} className="grid gap-3">
           <div><label className="label" htmlFor="cn">Full name</label><NameInput id="cn" value={f.name} onChange={(v) => setF({ ...f, name: v })} required /></div>
+          <div><label className="label" htmlFor="cp">Phone</label><input id="cp" type="tel" className="field" placeholder="0712 345 678" required={kind === "parent"} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
           <div><label className="label" htmlFor="ce">Email</label><input id="ce" type="email" className="field" required value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
-          <div><label className="label" htmlFor="cp">Phone</label><input id="cp" type="tel" className="field" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <select className="field" aria-label="Role" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{Object.entries(ROLE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-            <select className="field" aria-label="Country" value={f.countryId} onChange={(e) => setF({ ...f, countryId: Number(e.target.value) })}>{(countries.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+            {kind === "staff" && (
+              <div><label className="label" htmlFor="crole">Role</label>
+                <select id="crole" className="field" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="coach">Coach</option><option value="admin">Admin</option><option value="super_admin">Super Admin</option></select>
+              </div>
+            )}
+            <div><label className="label" htmlFor="ccountry">Country</label>
+              <select id="ccountry" className="field" value={f.countryId} onChange={(e) => setF({ ...f, countryId: Number(e.target.value) })}>{(countries.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+            </div>
           </div>
+          {kind === "staff" && f.role === "coach" && (
+            <fieldset><legend className="label">Coaches at</legend><AssignmentPicker value={assignments} onChange={setAssignments} intramurals={intramurals.data ?? []} /></fieldset>
+          )}
+          {kind === "parent" && <ChildPicker value={children} onChange={setChildren} />}
+          <div><label className="label" htmlFor="cpw">Temporary password</label><input id="cpw" className="field" placeholder="Leave empty to generate one" autoComplete="off" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
           {error && <Notice tone="bad">{error}</Notice>}
           <button className="btn-primary">Create account</button>
         </form>
       )}
     </Modal>
+  );
+}
+
+// ---- Parents -----------------------------------------------------------------------------
+
+function Parents() {
+  const qc = useQueryClient();
+  const parents = useQuery({ queryKey: ["creator-parents"], queryFn: () => api<any[]>("/creator/parents") });
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState<any | null>(null);
+  const [creating, setCreating] = useState(false);
+  if (parents.isLoading) return <Spinner />;
+  if (parents.error) return <ErrorNote error={parents.error} />;
+  const list = parents.data!.filter((p) => `${p.name} ${p.email} ${p.phone ?? ""} ${p.children.map((c: any) => c.name).join(" ")}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <>
+      <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+        <div className="relative"><Search className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-slate" aria-hidden /><input className="field pl-10" placeholder="Search parent or child" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search parents" /></div>
+        <button className="btn-primary" onClick={() => setCreating(true)}><UserPlus className="h-4 w-4" /> Add a parent</button>
+      </div>
+      {list.length === 0 ? <Empty>No parents yet. Add one, or they can sign up themselves.</Empty> : (
+        <ul className="grid gap-2">
+          {list.map((p) => (
+            <li key={p.id} className="sheet">
+              <div className="flex items-start gap-3">
+                <button className="min-w-0 flex-1 text-left" onClick={() => setOpen(p)}>
+                  <p className="font-bold text-navy">{p.name} {p.status !== "active" && <span className={`chip ml-1 ${p.status === "pending" ? "bg-warn/15 text-warn" : "bg-bad/10 text-bad"}`}>{p.status}</span>}</p>
+                  <p className="truncate text-sm text-slate">{p.phone ?? "No phone"} · {p.email}</p>
+                  <p className="mt-1 text-sm">
+                    {p.children.length ? p.children.map((c: any) => `${c.name} (${c.category || "?"}, ${c.intramuralName})${c.verified ? "" : " · to confirm"}`).join("; ") : <span className="text-slate">No children linked</span>}
+                  </p>
+                </button>
+                {p.children.some((c: any) => c.verified) && (
+                  <Link to={`/creator/parents/${p.id}/preview`} className="btn-ghost min-h-9 px-3" aria-label={`Preview ${p.name}'s dashboard`}><Eye className="h-4 w-4" /> Preview</Link>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && <ParentEditor parent={open} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); void qc.invalidateQueries({ queryKey: ["creator-parents"] }); }} />}
+      {creating && <CreatePerson kind="parent" onClose={() => setCreating(false)} onSaved={() => void qc.invalidateQueries({ queryKey: ["creator-parents"] })} />}
+    </>
+  );
+}
+
+/** Search players and tick the parent's children. */
+function ChildPicker({ value, onChange }: { value: number[]; onChange: (v: number[]) => void }) {
+  const [q, setQ] = useState("");
+  const players = useQuery({ queryKey: ["creator-players", q], queryFn: () => api<any[]>(`/creator/players?q=${encodeURIComponent(q)}`) });
+  const chosen = useQuery({ queryKey: ["creator-players", ""], queryFn: () => api<any[]>(`/creator/players?q=`) });
+  const names = new Map((chosen.data ?? []).concat(players.data ?? []).map((p) => [p.id, p]));
+  return (
+    <fieldset>
+      <legend className="label">Children</legend>
+      {value.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1">
+          {value.map((id) => (
+            <button type="button" key={id} onClick={() => onChange(value.filter((x) => x !== id))} className="chip bg-navy py-1 text-white">
+              {names.get(id)?.name ?? `Player ${id}`} ✕
+            </button>
+          ))}
+        </div>
+      )}
+      <input className="field" placeholder="Search a child or guardian name" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search children" />
+      <ul className="mt-2 max-h-48 overflow-y-auto rounded-xl ring-1 ring-line">
+        {(players.data ?? []).filter((p) => !value.includes(p.id)).slice(0, 30).map((p) => (
+          <li key={p.id}>
+            <button type="button" className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-page" onClick={() => onChange([...value, p.id])}>
+              <span><span className="font-semibold">{p.name}</span> <span className="text-slate">{p.category} · {p.intramuralName}</span></span>
+              <span className="text-xs text-slate">{p.guardianName}</span>
+            </button>
+          </li>
+        ))}
+        {(players.data ?? []).length === 0 && <li className="px-3 py-2 text-sm text-slate">No players found.</li>}
+      </ul>
+    </fieldset>
+  );
+}
+
+function ParentEditor({ parent, onClose, onSaved }: { parent: any; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState({ name: parent.name, email: parent.email, phone: parent.phone ?? "", status: parent.status });
+  const [children, setChildren] = useState<number[]>(parent.children.map((c: any) => c.playerId));
+  const [error, setError] = useState("");
+  const save = async () => {
+    setError("");
+    try {
+      await api(`/creator/parents/${parent.id}`, { method: "PATCH", body: f });
+      await api(`/creator/parents/${parent.id}/children`, { method: "PUT", body: { playerIds: children } });
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  const remove = async () => {
+    if (!confirm(`Remove ${parent.name}'s parent account? Their children's records stay.`)) return;
+    try { await api(`/creator/users/${parent.id}`, { method: "DELETE" }); onSaved(); } catch (err) { setError((err as Error).message); }
+  };
+  return (
+    <Modal open onClose={onClose} title={parent.name}>
+      <div className="grid gap-3">
+        <div><label className="label" htmlFor="pn">Name</label><NameInput id="pn" value={f.name} onChange={(v) => setF({ ...f, name: v })} /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label" htmlFor="pph">Phone</label><input id="pph" type="tel" className="field" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
+          <div><label className="label" htmlFor="pst">Status</label>
+            <select id="pst" className="field" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="active">Active</option><option value="pending">Pending</option><option value="suspended">Suspended</option></select>
+          </div>
+        </div>
+        <div><label className="label" htmlFor="pem">Email</label><input id="pem" type="email" className="field" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
+        <ChildPicker value={children} onChange={setChildren} />
+        {error && <Notice tone="bad">{error}</Notice>}
+        <button className="btn-primary" onClick={save}>Save parent</button>
+        <TempPassword userId={parent.id} name={parent.name} />
+        <button className="btn-ghost text-bad" onClick={remove}><Trash2 className="h-4 w-4" /> Remove parent account</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Admin's read-only view of what a parent sees. */
+export function ParentPreview() {
+  const { id } = useParams();
+  const q = useQuery({ queryKey: ["parent-preview", id], queryFn: () => api<{ parent: { name: string }; children: Child[] }>(`/creator/parents/${id}/children`) });
+  const [selected, setSelected] = useState<number | null>(null);
+  if (q.isLoading) return <Spinner />;
+  if (q.error) return <ErrorNote error={q.error} />;
+  const { parent, children } = q.data!;
+  const child = children.find((c) => c.id === selected) ?? children[0];
+  return (
+    <div className="parent-3d">
+      <p className="mb-3 rounded-xl bg-warn/15 p-3 text-sm font-semibold text-warn">Preview: this is what {parent.name} sees. Nothing here can be changed.</p>
+      <PageTitle banner title={`${parent.name.split(" ")[0]}'s dashboard`} sub={<Link to="/creator/parents" className="underline">Back to Parents</Link>} />
+      {children.length > 1 && (
+        <div className="-mx-4 mb-2 flex gap-3 overflow-x-auto px-4 pb-6 pt-2" role="tablist">
+          {children.map((c) => (
+            <button key={c.id} role="tab" aria-selected={c.id === child.id} onClick={() => setSelected(c.id)} className="token flex items-center gap-2 whitespace-nowrap rounded-full py-1.5 pl-1.5 pr-4 text-[15px] font-semibold text-navy">
+              <span className="bead grid h-8 w-8 place-items-center rounded-full text-sm text-white" style={{ background: c.color }}>{c.firstName[0]}</span>{c.firstName}
+            </button>
+          ))}
+        </div>
+      )}
+      {child ? <ChildDashboard key={child.id} child={child} preview /> : <Empty>No confirmed children yet.</Empty>}
+    </div>
   );
 }
 

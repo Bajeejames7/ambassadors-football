@@ -4,6 +4,7 @@ import { HttpError, me } from "../auth.js";
 import {
   addMentorshipLog, addTally, answerAvailability, attendanceInput, availabilityInput, equipmentInput, injuryInput,
   mentorshipInput, playerInput, recordAttendance, registerPlayer, reportInjury, saveEquipmentCheck, tallyInput,
+  sessionReportInput, submitSessionReport,
 } from "../lib/field.js";
 
 /**
@@ -22,6 +23,7 @@ const handlers = {
   mentorship: { schema: mentorshipInput, run: addMentorshipLog },
   injury: { schema: injuryInput, run: reportInjury },
   availability: { schema: availabilityInput, run: answerAvailability },
+  session_report: { schema: sessionReportInput, run: submitSessionReport },
 } as const;
 
 const syncInput = z.object({
@@ -38,7 +40,7 @@ syncRoutes.post("/sync", async (req, res) => {
     const h = handlers[op.type];
     try {
       // The op id doubles as the clientId, so a re-sent op is applied once.
-      const payload = { ...(op.payload as object), ...(["walk_in", "tally", "mentorship", "injury", "equipment"].includes(op.type) ? { clientId: op.id } : {}) };
+      const payload = { ...(op.payload as object), ...(["walk_in", "tally", "mentorship", "injury", "equipment", "session_report"].includes(op.type) ? { clientId: op.id } : {}) };
       const result = await (h.run as (m: typeof user, p: unknown) => Promise<unknown>)(user, h.schema.parse(payload));
       results.push({ id: op.id, ok: true, result });
     } catch (err) {

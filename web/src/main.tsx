@@ -9,9 +9,12 @@ import { BASE } from "./lib/base";
 import { captureInstallPrompt } from "./lib/install";
 
 captureInstallPrompt();
+document.documentElement.style.setProperty("--hero-url", `url("${BASE}hero.jpg")`);
 import { Layout } from "./components/Layout";
 import { DeleteAccountInfoPage, LoginPage, PrivacyPage, SignupPage } from "./pages/Auth";
 import { ChildRoute, FeesPage, ParentHome } from "./pages/Parent";
+import { RegisterPage } from "./pages/Register";
+import { ParentPreview } from "./pages/Creator";
 import { FieldIndex, SchedulePage, SessionPage, StaffHome } from "./pages/Staff";
 import { FieldCheckIn, QueuePage } from "./pages/Field";
 import { IntramuralHub, PlayerPage } from "./pages/Hub";
@@ -46,6 +49,7 @@ function Routed() {
             <Route path="child/:id" element={<ChildRoute />} />
             <Route path="child/:id/fees" element={<FeesPage />} />
             <Route path="fees" element={<FeesPage />} />
+            <Route path="register" element={<RegisterPage />} />
           </>
         ) : (
           <>
@@ -58,6 +62,8 @@ function Routed() {
             <Route path="s/:id/field" element={<FieldCheckIn />} />
             <Route path="players/:id" element={<PlayerPage />} />
             {me.isSuperAdmin && <Route path="creator" element={<CreatorControl />} />}
+            {me.isSuperAdmin && <Route path="creator/:tab" element={<CreatorControl />} />}
+            {me.isSuperAdmin && <Route path="creator/parents/:id/preview" element={<ParentPreview />} />}
           </>
         )}
         <Route path="*" element={<Navigate to="/" replace />} />

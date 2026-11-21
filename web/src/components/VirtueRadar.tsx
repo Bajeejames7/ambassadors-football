@@ -14,7 +14,7 @@ export function VirtueRadar({ data, compare }: { data: { virtue: string; average
       <ResponsiveContainer>
         <RadarChart data={rows} outerRadius="72%">
           <PolarGrid stroke="#d9e0ec" />
-          <PolarAngleAxis dataKey="virtue" tick={{ fill: "#16224f", fontSize: 12, fontWeight: 600 }} />
+          <PolarAngleAxis dataKey="virtue" tick={{ fill: "#0f2147", fontSize: 12, fontWeight: 600 }} />
           <PolarRadiusAxis domain={[0, 10]} tickCount={6} tick={{ fill: "#5b6690", fontSize: 10 }} axisLine={false} />
           {compare && <Radar name="Start of season" dataKey="earlier" stroke="#9aa6c8" fill="#9aa6c8" fillOpacity={0.12} strokeDasharray="4 3" />}
           <Radar name="This season" dataKey="score" stroke="#2f5bd3" strokeWidth={2} fill="#2f5bd3" fillOpacity={0.28} dot={{ r: 3, fill: "#2f5bd3" }} />

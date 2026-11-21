@@ -78,3 +78,39 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "privileges.grant": "Can grant field privileges to coaches",
   "country.override": "Can work outside their country",
 };
+
+export const AGE_GROUPS = ["U7", "U9", "U11", "U13", "U15", "U17"];
+
+/** Age group for a birth year this season (born 2017 → U11 in 2026). */
+export function ageGroupFor(birthYear: number, seasonYear = Number(today().slice(0, 4))): string {
+  const age = seasonYear - birthYear;
+  for (const g of AGE_GROUPS) if (age < Number(g.slice(1))) return g;
+  return "U17";
+}
+
+/** What to call a session: "Tuesday session", "Match vs Daniels", "Summer Camp". */
+export function sessionLabel(s: { kind: string; title?: string; opponent?: string; dayLabel?: string; date: string }): string {
+  switch (s.kind) {
+    case "match": return `Match${s.opponent ? ` vs ${s.opponent}` : ""}`;
+    case "tournament": return s.title || "Tournament";
+    case "camp": return s.title || "Camp";
+    case "clinic": return s.title || "Clinic";
+    default: return `${s.dayLabel ?? dayName(s.date)} session`;
+  }
+}
+
+/** "Wed 16 Dec" or, for a multi-day camp, "Wed 16 – Fri 18 Dec". */
+export function dateRange(date: string, endDate?: string | null): string {
+  if (!endDate || endDate <= date) return shortDate(date);
+  const a = new Date(`${date}T00:00:00Z`);
+  const b = new Date(`${endDate}T00:00:00Z`);
+  const sameMonth = a.getUTCMonth() === b.getUTCMonth();
+  const left = a.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", ...(sameMonth ? {} : { month: "short" }), timeZone: "UTC" });
+  return `${left} – ${shortDate(endDate)}`;
+}
+
+/** Airtable share link → embeddable form URL (airtable.com/appX/shrY → airtable.com/embed/appX/shrY). */
+export function airtableEmbedUrl(url: string): string | null {
+  const m = url.match(/^https:\/\/airtable\.com\/(?:embed\/)?((?:app[A-Za-z0-9]+\/)?shr[A-Za-z0-9]+)/);
+  return m ? `https://airtable.com/embed/${m[1]}` : null;
+}

@@ -11,7 +11,7 @@ const INTRAMURAL_FIELDS = `
   i.session_weekday AS "sessionWeekday", to_char(i.session_start, 'HH24:MI') AS "sessionStart",
   to_char(i.session_end, 'HH24:MI') AS "sessionEnd", i.location, i.dress_code AS "dressCode",
   i.availability_options AS "availabilityOptions", i.default_roles AS "defaultRoles",
-  i.default_schedule AS "defaultSchedule", i.teams, i.categories, i.archived,
+  i.default_schedule AS "defaultSchedule", i.teams, i.categories, i.archived, i.program_mode AS "programMode",
   i.country_id AS "countryId", c.name AS "countryName", c.currency, c.time_zone AS "timeZone", c.mpesa`;
 
 /**
@@ -68,7 +68,7 @@ intramuralRoutes.get("/intramurals", async (req, res) => {
          FROM sessions WHERE intramural_id = $1 AND date >= $2 AND NOT cancelled ORDER BY date, start_time LIMIT 1`,
       [r.id, today(r.timeZone)],
     );
-    out.push({ ...r, dayLabel: sessionDayLabel(r.sessionWeekday), nextSession: next ?? null, myPermissions: permissionsHere(user, r) });
+    out.push({ ...r, teams: r.programMode === "school" ? r.teams : [], dayLabel: sessionDayLabel(r.sessionWeekday), nextSession: next ?? null, myPermissions: permissionsHere(user, r) });
   }
   res.json(out);
 });
@@ -91,7 +91,17 @@ intramuralRoutes.get("/intramurals/:id", async (req, res) => {
        FROM airtable_configs WHERE intramural_id = $1`,
     [id],
   );
-  const result: Record<string, unknown> = { ...row, dayLabel: sessionDayLabel(row.sessionWeekday), myPermissions: permissionsHere(user, ref) };
+  const mine = await one<{ ageGroups: string[] }>(`SELECT age_groups AS "ageGroups" FROM user_intramurals WHERE user_id = $1 AND intramural_id = $2`, [user.id, id]);
+  const result: Record<string, unknown> = {
+    ...row,
+    // Clubs don't use the 4 Virtue Teams.
+    teams: row.programMode === "school" ? row.teams : [],
+    dayLabel: sessionDayLabel(row.sessionWeekday),
+    myPermissions: permissionsHere(user, ref),
+    // The age groups this coach works with here (empty = all).
+    myAgeGroups: mine?.ageGroups ?? [],
+    assigned: !!mine,
+  };
   // Parents get only the registration form link; staff see whether search is set up; Airtable managers see it all.
   result.airtable = can(user, "airtable.manage", ref)
     ? air
@@ -118,6 +128,7 @@ const setupInput = z.object({
   defaultRoles: z.array(z.string().trim().min(1).max(60)).max(20),
   categories: z.array(z.string().trim().min(1).max(40)).max(20),
   teams: z.array(z.object({ id: z.string().min(1).max(30), name: z.string().min(1).max(40), color: z.string().max(9) })).max(12),
+  programMode: z.enum(["school", "club"]),
   availabilityOptions: z
     .array(z.object({ id: z.string().min(1).max(40), label: z.string().min(1).max(120), tone: z.enum(["good", "ok", "bad"]) }))
     .min(2)
@@ -138,6 +149,7 @@ intramuralRoutes.patch("/intramurals/:id", async (req, res) => {
     default_schedule: s.defaultSchedule && JSON.stringify([...s.defaultSchedule].sort((a, b) => a.time.localeCompare(b.time))),
     default_roles: s.defaultRoles && JSON.stringify(s.defaultRoles), categories: s.categories && JSON.stringify(s.categories),
     teams: s.teams && JSON.stringify(s.teams), availability_options: s.availabilityOptions && JSON.stringify(s.availabilityOptions),
+    program_mode: s.programMode,
   };
   const set = Object.entries(cols).filter(([, v]) => v !== undefined);
   if (set.length) {

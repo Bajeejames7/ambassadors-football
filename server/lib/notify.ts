@@ -53,3 +53,9 @@ export async function parentApprovers(intramuralId: number): Promise<number[]> {
   );
   return rows.map((r) => r.id);
 }
+
+/** Every active Admin and Super Admin (they share the same powers). */
+export async function allAdmins(): Promise<number[]> {
+  const rows = await query<{ id: number }>(`SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND status = 'active'`);
+  return rows.map((r) => r.id);
+}

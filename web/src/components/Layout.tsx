@@ -1,5 +1,5 @@
 import { NavLink, Outlet, Link } from "react-router-dom";
-import { Bell, CalendarDays, ClipboardCheck, CloudOff, Home, RefreshCw, ShieldCheck, UserRound, Wallet } from "lucide-react";
+import { Bell, CalendarDays, ClipboardCheck, ClipboardPen, CloudOff, Home, RefreshCw, ShieldCheck, UserRound } from "lucide-react";
 import { asset } from "../lib/base";
 import { useAuth } from "../lib/auth";
 import { useOffline } from "../lib/offline";
@@ -13,7 +13,7 @@ function navFor(role: string, isSuper: boolean) {
     return [
       { to: "/", label: "Home", icon: Home },
       { to: "/schedule", label: "Schedule", icon: CalendarDays },
-      { to: "/fees", label: "Fees", icon: Wallet },
+      { to: "/register", label: "Register", icon: ClipboardPen },
       { to: "/notifications", label: "Alerts", icon: Bell },
       { to: "/account", label: "Account", icon: UserRound },
     ];

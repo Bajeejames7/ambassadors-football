@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { COACH_GRANTABLE, HttpError, audit, can, intramuralRef, me, requirePermission, requireSee, requireStaff } from "../auth.js";
 import { one, query, transaction } from "../db.js";
-import { normalizeEmail } from "../util.js";
+import { AGE_GROUPS, normalizeEmail } from "../util.js";
 import { notify } from "../lib/notify.js";
 
 /**
@@ -17,7 +17,7 @@ peopleRoutes.get("/intramurals/:id/people", async (req, res) => {
   const id = Number(req.params.id);
   await requireSee(user, id);
   const staff = await query(
-    `SELECT u.id, u.name, u.email, u.phone, u.role,
+    `SELECT u.id, u.name, u.email, u.phone, u.role, ui.age_groups AS "ageGroups",
             coalesce((SELECT json_agg(json_build_object('permission', permission, 'intramuralId', intramural_id, 'expiresAt', expires_at))
                         FROM user_permissions up WHERE up.user_id = u.id AND (up.intramural_id IS NULL OR up.intramural_id = $1)
                          AND (up.expires_at IS NULL OR up.expires_at > now())), '[]') AS grants
@@ -60,7 +60,12 @@ peopleRoutes.post("/intramurals/:id/coaches", async (req, res) => {
   if (target.role === "parent") throw new HttpError(400, "That is a parent account");
   // Country isolation: admins can only bring in coaches from the same country.
   if (!user.isSuperAdmin && target.countryId !== ref.countryId) throw new HttpError(403, "That coach is registered in another country. Ask a Super Admin.");
-  await query(`INSERT INTO user_intramurals (user_id, intramural_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [target.id, id]);
+  const ageGroups = z.array(z.enum(AGE_GROUPS)).max(AGE_GROUPS.length).default([]).parse(req.body?.ageGroups ?? []);
+  await query(
+    `INSERT INTO user_intramurals (user_id, intramural_id, age_groups) VALUES ($1,$2,$3)
+     ON CONFLICT (user_id, intramural_id) DO UPDATE SET age_groups = EXCLUDED.age_groups`,
+    [target.id, id, ageGroups],
+  );
   const name = (await one(`SELECT name FROM intramurals WHERE id = $1`, [id])).name;
   await notify([target.id], { kind: "privileges", title: `You were added to ${name}`, link: `/i/${id}` });
   await audit(user.id, "coach_assigned", { userId: target.id, intramuralId: id });
@@ -220,5 +225,20 @@ peopleRoutes.post("/parent-links/remove", async (req, res) => {
   await requirePermission(user, "parents.approve", p.intramuralId);
   await query(`DELETE FROM parent_children WHERE parent_id = $1 AND player_id = $2`, [input.parentId, input.playerId]);
   await audit(user.id, "parent_link_removed", input);
+  res.json({ ok: true });
+});
+
+/** Which age groups a coach works with at this school (empty = all). */
+peopleRoutes.put("/intramurals/:id/coaches/:userId/age-groups", async (req, res) => {
+  const user = me(req);
+  const id = Number(req.params.id);
+  await requirePermission(user, "roles.assign", id);
+  const { ageGroups } = z.object({ ageGroups: z.array(z.enum(AGE_GROUPS)).max(AGE_GROUPS.length) }).parse(req.body);
+  const row = await one(
+    `UPDATE user_intramurals SET age_groups = $3 WHERE user_id = $1 AND intramural_id = $2 RETURNING user_id`,
+    [Number(req.params.userId), id, ageGroups],
+  );
+  if (!row) throw new HttpError(404, "That coach is not assigned here");
+  await audit(user.id, "coach_age_groups_set", { userId: Number(req.params.userId), intramuralId: id, ageGroups });
   res.json({ ok: true });
 });

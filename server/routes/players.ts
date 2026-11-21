@@ -10,7 +10,7 @@ import {
 export const playerRoutes = Router();
 
 const PLAYER_FIELDS = `p.id, p.intramural_id AS "intramuralId", p.first_name AS "firstName", p.last_name AS "lastName",
-  p.date_of_birth AS "dateOfBirth", p.category, p.team, p.source, p.active, p.airtable_record_id AS "airtableRecordId", p.created_at AS "createdAt"`;
+  p.date_of_birth AS "dateOfBirth", p.birth_year AS "birthYear", p.category, p.team, p.source, p.active, p.airtable_record_id AS "airtableRecordId", p.created_at AS "createdAt"`;
 const GUARDIAN_FIELDS = `p.guardian_name AS "guardianName", p.guardian_email AS "guardianEmail", p.guardian_phone AS "guardianPhone", p.medical_notes AS "medicalNotes"`;
 
 /** The roster (cached on phones for offline check-in). */
@@ -20,14 +20,19 @@ playerRoutes.get("/intramurals/:id/players", async (req, res) => {
   const id = Number(req.params.id);
   await requirePermission(user, "roster.view", id);
   const q = String(req.query.q ?? "").trim().toLowerCase();
+  // ?mine=1 → only the age groups this coach works with here.
+  const mine = req.query.mine === "1"
+    ? (await one<{ ageGroups: string[] }>(`SELECT age_groups AS "ageGroups" FROM user_intramurals WHERE user_id = $1 AND intramural_id = $2`, [user.id, id]))?.ageGroups ?? []
+    : [];
   res.json(
     await query(
       `SELECT ${PLAYER_FIELDS}, ${GUARDIAN_FIELDS},
               EXISTS (SELECT 1 FROM parent_children pc WHERE pc.player_id = p.id AND pc.verified_at IS NOT NULL) AS "hasParentAccount"
          FROM players p WHERE p.intramural_id = $1 AND p.active
           AND ($2 = '' OR lower(p.first_name || ' ' || p.last_name) LIKE '%' || $2 || '%')
+          AND (cardinality($3::text[]) = 0 OR p.category = ANY($3::text[]))
         ORDER BY p.category, p.first_name, p.last_name`,
-      [id, q],
+      [id, q, mine],
     ),
   );
 });
@@ -41,6 +46,7 @@ const editInput = z.object({
   firstName: z.string().trim().min(1).max(60),
   lastName: z.string().trim().max(60),
   dateOfBirth: z.string().refine(isDate).nullable(),
+  birthYear: z.number().int().min(1990).max(2100).nullable(),
   category: z.string().max(40),
   team: z.string().max(40),
   guardianName: z.string().max(100),
@@ -59,7 +65,7 @@ playerRoutes.patch("/players/:id", async (req, res) => {
   if (e.guardianPhone && !phone) throw new HttpError(400, "The parent's phone number does not look right");
   const cols: Record<string, unknown> = {
     first_name: e.firstName && titleCaseName(e.firstName), last_name: e.lastName !== undefined ? titleCaseName(e.lastName) : undefined,
-    date_of_birth: e.dateOfBirth, category: e.category, team: e.team,
+    date_of_birth: e.dateOfBirth, birth_year: e.birthYear, category: e.category, team: e.team,
     guardian_name: e.guardianName !== undefined ? titleCaseName(e.guardianName) : undefined,
     guardian_email: e.guardianEmail !== undefined ? normalizeEmail(e.guardianEmail) : undefined, guardian_phone: phone,
     medical_notes: e.medicalNotes, active: e.active,
@@ -237,3 +243,36 @@ playerRoutes.put("/sessions/:id/attendance", async (req, res) => {
 });
 
 export { requireSee };
+
+/**
+ * Emergency / Injury info for one player: medical notes and every way to reach
+ * a parent right now. Staff only.
+ */
+playerRoutes.get("/players/:id/emergency", async (req, res) => {
+  const user = me(req);
+  requireStaff(user);
+  const p = await requirePlayer(user, Number(req.params.id));
+  await requirePermission(user, "roster.view", p.intramuralId);
+  const player = await one(
+    `SELECT p.id, p.first_name AS "firstName", p.last_name AS "lastName", p.category, p.medical_notes AS "medicalNotes",
+            p.guardian_name AS "guardianName", p.guardian_phone AS "guardianPhone", p.guardian_email AS "guardianEmail",
+            i.name AS "intramuralName", i.coordinator_name AS "coordinatorName"
+       FROM players p JOIN intramurals i ON i.id = p.intramural_id WHERE p.id = $1`,
+    [p.id],
+  );
+  const parents = await query(
+    `SELECT u.name, u.phone, u.email FROM parent_children pc JOIN users u ON u.id = pc.parent_id
+      WHERE pc.player_id = $1 AND pc.verified_at IS NOT NULL ORDER BY u.name`,
+    [p.id],
+  );
+  const injuries = await query(
+    `SELECT severity, body_part AS "bodyPart", description, created_at AS "createdAt" FROM injuries
+      WHERE player_id = $1 ORDER BY created_at DESC LIMIT 3`,
+    [p.id],
+  );
+  // One list of numbers to call, the registration contact first, without duplicates.
+  const contacts: { name: string; phone: string }[] = [];
+  if (player.guardianPhone) contacts.push({ name: player.guardianName || "Parent", phone: player.guardianPhone });
+  for (const pa of parents) if (pa.phone && !contacts.some((c) => c.phone === pa.phone)) contacts.push({ name: pa.name, phone: pa.phone });
+  res.json({ ...player, contacts, parents, recentInjuries: injuries });
+});
