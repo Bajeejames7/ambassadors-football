@@ -42,6 +42,14 @@ Demo sign-ins after `seed:demo`: `CREATOR_EMAIL` (Super Admin), `kate@example.or
 - `npm test` runs 22 API tests against a real database (`TEST_DATABASE_URL`, which gets wiped). They cover access rules, country isolation, parent isolation, duplicates, offline sync, M-PESA and the PDF report.
 - `npm run typecheck`, then `npm run build`, then `npm start` (one server for the app and the API).
 
+## Where it runs now (demo)
+
+It runs inside the **Rafiki_games** Render service at **`/ambassadors/`**, the same way interschool runs at `/interschool/`:
+
+- `npm run embed -- ../Rafiki_games/artifacts/api-server/ambassadors` builds `server.mjs` + `web/` for the `/ambassadors/` path and copies them into the Rafiki repo; commit and push Rafiki and Render redeploys.
+- It reuses Rafiki's `INTERSCHOOL_DATABASE_URL` but keeps all its tables in its own Postgres schema, `ambassadors_football`, so interschool's data is never touched.
+- Demo mode is on: the sign-in screen offers demo accounts (password `ambassadors1`). Before real families use it, set `AMBASSADORS_DEMO=0` on Render (and `AMBASSADORS_CREATOR_EMAIL` to the Super Admin's email). See `artifacts/api-server/src/lib/ambassadors.ts` in Rafiki_games for every setting.
+
 ## Put it online
 
 1. Create a Postgres database (Neon free tier works) and copy its connection string.
