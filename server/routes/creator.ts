@@ -2,7 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { ADMIN_PERMISSIONS, COUNTRY_OVERRIDE, HttpError, audit, isCreatorEmail, me, requireSuperAdmin } from "../auth.js";
+import { ADMIN_PERMISSIONS, COUNTRY_OVERRIDE, HttpError, audit, isCreatorEmail, me, requireAllowed, requireSuperAdmin, type Restriction } from "../auth.js";
 import { one, query, transaction } from "../db.js";
 import { AGE_GROUPS, normalizeEmail, normalizePhone, titleCaseName } from "../util.js";
 import { notify } from "../lib/notify.js";
@@ -14,10 +14,30 @@ import { notify } from "../lib/notify.js";
  */
 export const creatorRoutes = Router();
 
+/** Which Privilege Control switch guards each area of Creator Control. */
+function areaOf(path: string): Restriction | null {
+  if (path.startsWith("/users")) return "coaches.manage";
+  if (/^\/parents\/\d+\/preview/.test(path)) return "parents.preview";
+  if (path.startsWith("/parents") || path.startsWith("/players")) return "parents.manage";
+  if (path.startsWith("/countries") || path.startsWith("/intramurals")) return "intramurals.edit";
+  return null;
+}
+
 creatorRoutes.use("/creator", (req, _res, next) => {
-  requireSuperAdmin(me(req));
+  const user = me(req);
+  requireSuperAdmin(user);
+  const area = areaOf(req.path);
+  if (area) requireAllowed(user, area);
   next();
 });
+
+/** Only the real Super Admin hands out, changes or removes Admin and Super Admin accounts. */
+function guardAdminAccounts(actor: ReturnType<typeof me>, roles: (string | undefined | null)[]): void {
+  if (actor.isRealSuperAdmin) return;
+  if (roles.some((r) => r === "admin" || r === "super_admin")) {
+    throw new HttpError(403, "Only the Super Admin can add, change or remove Admin and Super Admin accounts");
+  }
+}
 
 creatorRoutes.get("/creator/users", async (req, res) => {
   const countryId = req.query.countryId ? Number(req.query.countryId) : null;
@@ -52,6 +72,7 @@ const createInput = z.object({
 creatorRoutes.post("/creator/users", async (req, res) => {
   const actor = me(req);
   const input = createInput.parse(req.body);
+  guardAdminAccounts(actor, [input.role]);
   const country = await one(`SELECT phone_prefix AS prefix FROM countries WHERE id = $1`, [input.countryId]);
   if (!country) throw new HttpError(400, "Choose a country");
   const phone = input.phone ? normalizePhone(input.phone, country.prefix) : null;
@@ -82,6 +103,7 @@ creatorRoutes.patch("/creator/users/:id", async (req, res) => {
   const input = updateInput.parse(req.body);
   const target = await one(`SELECT id, email, role FROM users WHERE id = $1`, [id]);
   if (!target) throw new HttpError(404, "That person does not exist");
+  guardAdminAccounts(actor, [target.role, input.role]);
   if (isCreatorEmail(target.email) && (input.role || input.status)) throw new HttpError(400, "The creator's role is set by CREATOR_EMAIL and cannot be changed here");
   if (id === actor.id && input.role && input.role !== "super_admin") throw new HttpError(400, "Ask another Super Admin to change your own role");
   await transaction(async (c) => {
@@ -122,6 +144,7 @@ creatorRoutes.put("/creator/users/:id/permissions", async (req, res) => {
   const { permissions } = permissionsInput.parse(req.body);
   const target = await one(`SELECT role FROM users WHERE id = $1`, [id]);
   if (!target) throw new HttpError(404, "That person does not exist");
+  guardAdminAccounts(actor, [target.role]);
   if (target.role === "parent") throw new HttpError(400, "Parents cannot hold staff permissions");
   await transaction(async (c) => {
     await c.query(`DELETE FROM user_permissions WHERE user_id = $1 AND intramural_id IS NULL`, [id]);
@@ -154,8 +177,9 @@ creatorRoutes.put("/creator/users/:id/intramurals", async (req, res) => {
 creatorRoutes.delete("/creator/users/:id", async (req, res) => {
   const actor = me(req);
   const id = Number(req.params.id);
-  const target = await one(`SELECT email FROM users WHERE id = $1`, [id]);
+  const target = await one(`SELECT email, role FROM users WHERE id = $1`, [id]);
   if (!target) throw new HttpError(404, "That person does not exist");
+  guardAdminAccounts(actor, [target.role]);
   if (isCreatorEmail(target.email) || id === actor.id) throw new HttpError(400, "You cannot remove this account");
   await query(`UPDATE payments SET phone = '', payer_id = NULL WHERE payer_id = $1`, [id]);
   await query(`DELETE FROM users WHERE id = $1`, [id]);
@@ -271,8 +295,9 @@ creatorRoutes.post("/creator/users/:id/password", async (req, res) => {
   const actor = me(req);
   const id = Number(req.params.id);
   const { password } = z.object({ password: z.string().min(8, "Temporary passwords need at least 8 characters").max(100).optional() }).parse(req.body ?? {});
-  const target = await one(`SELECT email FROM users WHERE id = $1`, [id]);
+  const target = await one(`SELECT email, role FROM users WHERE id = $1`, [id]);
   if (!target) throw new HttpError(404, "That person does not exist");
+  if (id !== actor.id) guardAdminAccounts(actor, [target.role]);
   if (isCreatorEmail(target.email) && id !== actor.id) throw new HttpError(400, "Only the creator can change the creator's password");
   const temporary = password ?? randomBytes(6).toString("base64url");
   await query(
@@ -298,6 +323,7 @@ creatorRoutes.put("/creator/users/:id/assignments", async (req, res) => {
   const { assignments } = assignmentsInput.parse(req.body);
   const target = await one(`SELECT role FROM users WHERE id = $1`, [id]);
   if (!target) throw new HttpError(404, "That person does not exist");
+  guardAdminAccounts(actor, [target.role]);
   if (target.role === "parent") throw new HttpError(400, "Parents are linked to children, not assigned to schools");
   await transaction(async (c) => {
     await c.query(`DELETE FROM user_intramurals WHERE user_id = $1`, [id]);

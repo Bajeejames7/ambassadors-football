@@ -9,6 +9,8 @@ import { dateRange, dateTime12, money, sessionLabel, shortDate, VIRTUE_LABELS } 
 import { Crest, Empty, ErrorNote, FixtureBoard, PageTitle, SectionTitle, Spinner } from "../components/ui";
 import { VirtueRadar } from "../components/VirtueRadar";
 import { useAuth } from "../lib/auth";
+import { AttendanceCard, CoachTimeline, PaymentCard, Placement, type Overview } from "../components/ChildProgress";
+import { RegisterChildButton } from "./Portal";
 
 export interface Child {
   id: number;
@@ -45,6 +47,7 @@ export function ParentHome() {
     return (
       <>
         <PageTitle title={`Welcome, ${first}`} />
+        <div className="mb-5"><RegisterChildButton /></div>
         <div className="sheet">
           <h2 className="condensed text-xl text-navy">We're confirming your children</h2>
           <p className="mt-2 text-[15px] text-slate">
@@ -59,6 +62,7 @@ export function ParentHome() {
   return (
     <>
       <PageTitle banner title={`Hello, ${first}`} sub={children.length > 1 ? "Choose a child to see their progress." : "Your child's progress, sessions and registration."} />
+      <div className="mb-5"><RegisterChildButton /></div>
       {children.length > 1 && (
         <div className="-mx-4 mb-2 flex gap-3 overflow-x-auto px-4 pb-6 pt-2" role="tablist" aria-label="Your children">
           {children.map((c) => (
@@ -96,6 +100,11 @@ export function ChildRoute() {
 export function ChildDashboard({ child, preview = false }: { child: Child; preview?: boolean }) {
   const qc = useQueryClient();
   const progress = useQuery({ queryKey: ["progress", child.id], queryFn: () => cached<any>(`/players/${child.id}/progress`) });
+  const overview = useQuery({ queryKey: ["overview", child.id], queryFn: () => cached<Overview>(`/players/${child.id}/overview`) });
+  const paid = () => {
+    void qc.invalidateQueries({ queryKey: ["overview", child.id] });
+    void qc.invalidateQueries({ queryKey: ["children"] });
+  };
   const unpaid = useQuery({ queryKey: ["unpaid", child.id], queryFn: () => cached<any[]>(`/players/${child.id}/unpaid-alerts`) });
   const upcoming = useUpcoming();
   const openUnpaid = (unpaid.data ?? []).filter((u) => !u.resolvedAt);
@@ -158,24 +167,16 @@ export function ChildDashboard({ child, preview = false }: { child: Child; previ
 
       {next && <FixtureBoard s={next} title={child.intramuralName} footer={<Link to="/schedule" className="text-sm font-semibold text-white underline">Full schedule</Link>} />}
 
-      <div className="mt-6 grid grid-cols-2 gap-3">
-        <div className="sheet">
-          <p className="text-sm font-semibold text-slate">Attendance this season</p>
-          <p className="extrude display mt-2 text-[2.6rem] text-navy">{p.attendance.rate == null ? "—" : `${p.attendance.rate}%`}</p>
-          <p className="text-sm text-slate">{p.attendance.attended} of {p.attendance.recorded} sessions</p>
-        </div>
-        <Link to={`/child/${child.id}/fees`} className="sheet block">
-          <p className="text-sm font-semibold text-slate">Balance</p>
-          <p className={`display mt-2 text-[2.1rem] ${child.balance > 0 ? "extrude text-navy" : "extrude-good text-good"}`}>{money(child.balance, child.currency)}</p>
-          <p className="text-sm font-semibold text-brand">{child.balance > 0 ? "View and pay" : "All paid · statement"}</p>
-        </Link>
-      </div>
-
-      {(child.balance > 0 || openUnpaid.length > 0) && !preview && (
-        <Link to={`/register?school=${child.intramuralId}`} className="btn btn-mpesa mt-4 h-12 w-full text-base">
-          <Wallet className="h-5 w-5" /> Register & pay (M-PESA)
-        </Link>
-      )}
+      {overview.data ? (
+        <>
+          <SectionTitle>Program & team</SectionTitle>
+          <Placement o={overview.data} />
+          <SectionTitle>Payment</SectionTitle>
+          <PaymentCard o={overview.data} childName={child.firstName} preview={preview} onPaid={paid} />
+          <SectionTitle>Attendance</SectionTitle>
+          <AttendanceCard o={overview.data} />
+        </>
+      ) : overview.isLoading ? <Spinner /> : null}
 
       <SectionTitle>Character & virtue growth</SectionTitle>
       <div className="sheet">
@@ -191,56 +192,8 @@ export function ChildDashboard({ child, preview = false }: { child: Child; previ
         )}
       </div>
 
-      {(p.awards as any[]).length > 0 && (
-        <>
-          <SectionTitle>Awards</SectionTitle>
-          <ul className="grid gap-3">
-            {(p.awards as any[]).map((a) => (
-              <li key={a.id} className="sheet flex items-start gap-3">
-                <Award className="h-6 w-6 shrink-0 text-warn" aria-hidden />
-                <div>
-                  <p className="font-bold text-navy">{a.award}</p>
-                  {a.reason && <p className="text-[15px] text-ink">{a.reason}</p>}
-                  <p className="text-xs text-slate">Week of {shortDate(a.weekOf)}{a.awardedBy ? ` · ${a.awardedBy}` : ""}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-
-      <SectionTitle>Coach feedback</SectionTitle>
-      {(p.feedbackByCategory as any[]).length ? (
-        <div className="sheet">
-          <ul className="divide-y divide-line">
-            {(p.feedbackByCategory as any[]).map((c) => (
-              <li key={c.category} className="py-3 first:pt-0 last:pb-0">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-navy">{c.category}</span>
-                  {c.count > 0 && <Stars value={c.average} />}
-                </div>
-                {c.latest && <p className="mt-1 text-[15px] text-ink">“{c.latest}”</p>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <Empty>No feedback yet. Coaches add notes after sessions.</Empty>
-      )}
-
-      <SectionTitle>Check-in history</SectionTitle>
-      {(p.attendance.history as any[]).length ? (
-        <ul className="sheet divide-y divide-line py-1">
-          {(p.attendance.history as any[]).slice(0, 10).map((h) => (
-            <li key={h.sessionId} className="flex items-center justify-between gap-3 py-2.5">
-              <span className="text-[15px]">{shortDate(h.date)}{h.kind !== "training" ? ` · ${h.title || h.kind}` : ""}</span>
-              <StatusChip status={h.status} at={h.checkedInAt} />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <Empty>Check-ins appear here after the first session.</Empty>
-      )}
+      <SectionTitle>Coach feedback & milestones</SectionTitle>
+      {overview.data && <CoachTimeline o={overview.data} />}
 
       {fixtures.length > 0 && (
         <>

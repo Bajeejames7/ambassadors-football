@@ -4,7 +4,7 @@ import { createApp } from "./app.js";
 import { configure, type Settings } from "./config.js";
 import { getPool } from "./db.js";
 import { migrate } from "./migrations.js";
-import { seedDemo, seedDemoExtras } from "./demo.js";
+import { seedDemo, seedDemoExtras, seedDemoTerm } from "./demo.js";
 import { processAirtableOutbox } from "./lib/airtable.js";
 
 /**
@@ -26,6 +26,7 @@ export async function createAmbassadors(settings: Partial<Omit<Settings, "mpesa"
   if (settings.demo) {
     await seedDemo();
     await seedDemoExtras();
+    await seedDemoTerm();
   }
   // Keep the database awake between visits (free tiers sleep), and send walk-ins to Airtable.
   setInterval(() => {

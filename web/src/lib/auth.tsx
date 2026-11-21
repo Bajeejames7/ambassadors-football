@@ -1,8 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, getStoredMe, getToken, onSignedOut, setStoredMe, setToken } from "./api";
 import { clearOfflineData } from "./offline";
+import { endPreview, inPreview } from "./portal";
 
 export type Role = "super_admin" | "admin" | "coach" | "parent";
+
+export type Restriction =
+  | "intramurals.edit" | "payments.view" | "coaches.manage" | "parents.manage" | "players.register"
+  | "attendance.take" | "reports.generate" | "equipment.check" | "analytics.view" | "parents.preview";
+
+/** Admins have every power unless the Super Admin switched it off (Privilege Control). */
+export const allowed = (me: Me | null, r: Restriction) => !!me && me.isSuperAdmin && !(me.restrictions ?? []).includes(r);
 
 export interface Me {
   id: number;
@@ -14,6 +22,12 @@ export interface Me {
   countryId: number | null;
   mustChangePassword: boolean;
   isSuperAdmin: boolean;
+  /** The real Super Admin (not an Admin with equal powers). */
+  isRealSuperAdmin: boolean;
+  /** Powers a Super Admin has switched off for this Admin. */
+  restrictions: Restriction[];
+  /** Set while a Super Admin previews this parent's portal. */
+  previewBy?: number;
   intramurals: number[];
   grants: { permission: string; intramuralId: number | null; expiresAt: string | null }[];
   children: number[];
@@ -40,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    if (inPreview()) { endPreview(); return; }
     setToken(null);
     setStoredMe(null);
     await clearOfflineData();
@@ -58,7 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     onSignedOut(() => void signOut());
     void refresh();
-    // The token also lives in IndexedDB for the service worker.
+    // The token also lives in IndexedDB for the service worker (setToken skips preview tabs).
     if (getToken()) setToken(getToken());
   }, [refresh, signOut]);
 

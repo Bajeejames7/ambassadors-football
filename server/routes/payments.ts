@@ -7,6 +7,7 @@ import { one, query, transaction } from "../db.js";
 import { isDate, mpesaPhone } from "../util.js";
 import { metadataValue, onMockCallback, stkPush, stkQuery, type StkCallback } from "../lib/mpesa.js";
 import { notify, parentsOf } from "../lib/notify.js";
+import { accountReference, ensureTermFees, paymentConfig } from "../lib/termfees.js";
 
 /** Public: Safaricom calls this. Mounted before sign-in is required. */
 export const mpesaCallbackRoutes = Router();
@@ -213,9 +214,28 @@ paymentRoutes.post("/players/:id/payments/manual", async (req, res) => {
 const stkInput = z.object({
   playerId: z.number().int(),
   phone: z.string().min(9).max(20),
-  amount: z.number().int("M-PESA amounts are whole shillings").min(1).max(250_000),
+  /** Admins only. Parents always pay what the Super Admin set (the balance due). */
+  amount: z.number().int("M-PESA amounts are whole shillings").min(1).max(250_000).optional(),
   feeItemId: z.number().int().nullable().optional(),
 });
+
+/** What is still owed: on one charge, or on the whole account. */
+async function amountDue(playerId: number, feeItemId: number | null): Promise<number> {
+  if (feeItemId) {
+    const f = await one(
+      `SELECT f.amount - coalesce((SELECT sum(amount) FROM payments y WHERE y.fee_item_id = f.id AND y.status = 'completed'), 0) AS due
+         FROM fee_items f WHERE f.id = $1 AND f.player_id = $2`,
+      [feeItemId, playerId],
+    );
+    return Math.max(0, Math.ceil(Number(f?.due ?? 0)));
+  }
+  const t = await one(
+    `SELECT coalesce((SELECT sum(amount) FROM fee_items WHERE player_id = $1), 0)
+          - coalesce((SELECT sum(amount) FROM payments WHERE player_id = $1 AND status = 'completed'), 0) AS due`,
+    [playerId],
+  );
+  return Math.max(0, Math.ceil(Number(t.due)));
+}
 
 paymentRoutes.post("/payments/mpesa", async (req, res) => {
   const user = me(req);
@@ -230,6 +250,12 @@ paymentRoutes.post("/payments/mpesa", async (req, res) => {
     const fee = await one(`SELECT id FROM fee_items WHERE id = $1 AND player_id = $2`, [input.feeItemId, p.id]);
     if (!fee) throw new HttpError(400, "That charge is not on this child's account");
   }
+  await ensureTermFees([p.intramuralId]);
+  // Parents cannot change the amount: it is the balance on the fee the Super Admin set.
+  const due = await amountDue(p.id, input.feeItemId ?? null);
+  const amount = user.role === "parent" || input.amount === undefined ? due : input.amount;
+  if (!(amount >= 1)) throw new HttpError(400, "Nothing is owed right now.");
+  if (amount > 250_000) throw new HttpError(400, "M-PESA prompts are limited to KES 250,000. Pay in parts or by bank.");
   // One prompt at a time: a double tap must not send two PIN prompts.
   const recent = await one(
     `SELECT id FROM payments WHERE player_id = $1 AND status = 'pending' AND method = 'mpesa' AND created_at > now() - interval '60 seconds'`,
@@ -240,12 +266,14 @@ paymentRoutes.post("/payments/mpesa", async (req, res) => {
   const payment = await one(
     `INSERT INTO payments (player_id, fee_item_id, payer_id, method, amount, currency, phone, status)
      VALUES ($1,$2,$3,'mpesa',$4,$5,$6,'pending') RETURNING id`,
-    [p.id, input.feeItemId ?? null, user.id, input.amount, country.currency, phone],
+    [p.id, input.feeItemId ?? null, user.id, amount, country.currency, phone],
   );
   try {
-    const push = await stkPush({ phone, amount: input.amount, accountReference: `AF${p.id}`, description: "Ambassadors" });
+    const cfg = await paymentConfig(p.intramuralId);
+    const info = await one(`SELECT p.first_name AS "firstName", i.short_code AS "shortCode" FROM players p JOIN intramurals i ON i.id = p.intramural_id WHERE p.id = $1`, [p.id]);
+    const push = await stkPush({ phone, amount, accountReference: accountReference(cfg?.accountRefFormat ?? "", { id: p.id, ...info }), description: "Ambassadors" });
     await query(`UPDATE payments SET merchant_request_id = $2, checkout_request_id = $3 WHERE id = $1`, [payment.id, push.merchantRequestId, push.checkoutRequestId]);
-    res.status(201).json({ paymentId: payment.id, status: "pending", message: "Check your phone and enter your M-PESA PIN." });
+    res.status(201).json({ paymentId: payment.id, status: "pending", amount, message: "Check your phone and enter your M-PESA PIN." });
   } catch (err) {
     await query(`UPDATE payments SET status = 'failed', result_desc = $2 WHERE id = $1`, [payment.id, (err as Error).message]);
     console.error("[mpesa stk]", err);
@@ -288,27 +316,68 @@ paymentRoutes.get("/payments/:id", async (req, res) => {
   res.json(out);
 });
 
-/** Payments overview for an intramural (who owes what). */
+/**
+ * Payments for one school or club: totals, paid vs unpaid children, and every
+ * M-PESA / cash record with receipt, phone and time. ?status=all|completed|pending|unpaid.
+ */
 paymentRoutes.get("/intramurals/:id/payments", async (req, res) => {
   const user = me(req);
   const id = Number(req.params.id);
   await requirePermission(user, "payments.manage", id);
-  const [balances, recent] = await Promise.all([
+  await ensureTermFees([id]);
+  const status = z.enum(["all", "completed", "pending", "unpaid"]).catch("all").parse(req.query.status ?? "all");
+  const [balances, records, config] = await Promise.all([
     query(
       `SELECT p.id AS "playerId", p.first_name || ' ' || p.last_name AS name, p.category,
               coalesce((SELECT sum(amount) FROM fee_items f WHERE f.player_id = p.id), 0) AS charged,
-              coalesce((SELECT sum(amount) FROM payments y WHERE y.player_id = p.id AND y.status = 'completed'), 0) AS paid
+              coalesce((SELECT sum(amount) FROM payments y WHERE y.player_id = p.id AND y.status = 'completed'), 0) AS paid,
+              EXISTS (SELECT 1 FROM payments y WHERE y.player_id = p.id AND y.status = 'pending' AND y.created_at > now() - interval '10 minutes') AS pending,
+              nullif(concat_ws(', ', nullif(p.guardian_phone, ''),
+                (SELECT string_agg(u.phone, ', ') FROM parent_children pc JOIN users u ON u.id = pc.parent_id
+                  WHERE pc.player_id = p.id AND pc.verified_at IS NOT NULL AND u.phone IS NOT NULL AND u.phone <> coalesce(p.guardian_phone, ''))), '') AS "parentPhones"
          FROM players p WHERE p.intramural_id = $1 AND p.active ORDER BY p.first_name`,
       [id],
     ),
     query(
-      `SELECT y.id, y.method, y.amount, y.status, y.mpesa_receipt AS receipt, y.created_at AS "createdAt",
-              p.first_name || ' ' || p.last_name AS "playerName"
-         FROM payments y JOIN players p ON p.id = y.player_id WHERE p.intramural_id = $1 ORDER BY y.created_at DESC LIMIT 50`,
-      [id],
+      `SELECT y.id, y.player_id AS "playerId", y.method, y.amount, y.status, y.mpesa_receipt AS receipt, y.phone,
+              y.result_desc AS "resultDesc", y.created_at AS "createdAt", y.completed_at AS "completedAt",
+              p.first_name || ' ' || p.last_name AS "playerName", f.title AS "feeTitle", u.name AS "payerName"
+         FROM payments y JOIN players p ON p.id = y.player_id LEFT JOIN fee_items f ON f.id = y.fee_item_id
+         LEFT JOIN users u ON u.id = y.payer_id
+        WHERE p.intramural_id = $1 AND ($2 = 'all' OR y.status = $2)
+        ORDER BY y.created_at DESC LIMIT 300`,
+      [id, status === "unpaid" ? "none" : status],
     ),
+    paymentConfig(id),
   ]);
-  res.json({ balances: balances.map((b) => ({ ...b, balance: b.charged - b.paid })), recent });
+  const rows = balances.map((b) => {
+    const balance = Number(b.charged) - Number(b.paid);
+    const state = Number(b.charged) === 0 ? "no_charge" : balance <= 0 ? "paid" : b.pending ? "pending" : Number(b.paid) > 0 ? "partial" : "unpaid";
+    return { ...b, balance, status: state };
+  });
+  const totals = await one(
+    `SELECT coalesce(sum(y.amount) FILTER (WHERE y.status = 'completed'), 0) AS collected,
+            count(*) FILTER (WHERE y.status = 'completed')::int AS completed,
+            count(*) FILTER (WHERE y.status = 'pending')::int AS pending
+       FROM payments y JOIN players p ON p.id = y.player_id WHERE p.intramural_id = $1`,
+    [id],
+  );
+  res.json({
+    config,
+    totals: {
+      collected: Number(totals.collected),
+      expected: rows.reduce((s, r) => s + Number(r.charged), 0),
+      outstanding: rows.reduce((s, r) => s + Math.max(0, r.balance), 0),
+      completed: totals.completed,
+      pending: totals.pending,
+      paidPlayers: rows.filter((r) => r.status === "paid").length,
+      unpaidPlayers: rows.filter((r) => r.status === "unpaid" || r.status === "partial" || r.status === "pending").length,
+    },
+    balances: status === "unpaid" ? rows.filter((r) => r.balance > 0) : rows,
+    records: status === "unpaid" ? [] : records,
+    // Older screens read "recent".
+    recent: records.slice(0, 50),
+  });
 });
 
 // ---- unpaid session / camp alerts ---------------------------------------------------------

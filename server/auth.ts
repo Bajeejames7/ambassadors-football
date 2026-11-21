@@ -33,6 +33,25 @@ export const ADMIN_PERMISSIONS = [
   "privileges.grant",   // Can grant field privileges to coaches
 ] as const;
 
+/**
+ * Powers a Super Admin can switch off for one Admin (Privilege Control).
+ * Admins have everything by default; each key here revokes the permissions
+ * listed with it, or a whole area of the app.
+ */
+export const RESTRICTIONS = {
+  "intramurals.edit": { label: "Edit intramurals (Setup, schedules, Airtable)", permissions: ["schedules.edit", "airtable.manage"] },
+  "payments.view": { label: "View payments and fees", permissions: ["payments.manage"] },
+  "coaches.manage": { label: "Manage coaches (staff, assignments, privileges)", permissions: ["roles.assign", "privileges.grant"] },
+  "parents.manage": { label: "Manage parent accounts", permissions: ["parents.approve"] },
+  "players.register": { label: "Register and edit players", permissions: ["players.register"] },
+  "attendance.take": { label: "Take attendance", permissions: ["attendance.take"] },
+  "reports.generate": { label: "Matchday PDF reports", permissions: ["reports.generate"] },
+  "equipment.check": { label: "Equipment checklist", permissions: ["equipment.check"] },
+  "analytics.view": { label: "Attendance analytics", permissions: [] },
+  "parents.preview": { label: "Preview the parent view", permissions: [] },
+} as const;
+export type Restriction = keyof typeof RESTRICTIONS;
+
 /** Field privileges an admin can hand to a coach (never Setup or delete controls). */
 export const COACH_GRANTABLE = ["attendance.take", "players.register", "equipment.check", "reports.generate"] as const;
 
@@ -69,6 +88,12 @@ export interface Me {
   countryId: number | null;
   mustChangePassword: boolean;
   isSuperAdmin: boolean;
+  /** The real Super Admin (not an Admin with equal powers). */
+  isRealSuperAdmin: boolean;
+  /** Admins: powers a Super Admin has switched off. */
+  restrictions: Restriction[];
+  /** Set when a Super Admin is previewing this parent's portal (read-only). */
+  previewBy?: number;
   /** Intramurals an admin/coach is assigned to. */
   intramurals: number[];
   /** Live (unexpired) permission grants. */
@@ -133,7 +158,7 @@ export async function loadMe(userId: number): Promise<(Me & { tokenVersion: numb
   // and club (Nov 2026 decision). `isSuperAdmin` therefore means "full access":
   // true for any active admin. Only the stored role label differs.
   const isSuperAdmin = isRealSuperAdmin || (row.role === "admin" && row.status === "active");
-  const [assigned, grants, kids] = await Promise.all([
+  const [assigned, grants, kids, restricted] = await Promise.all([
     query<{ id: number }>(`SELECT intramural_id AS id FROM user_intramurals WHERE user_id = $1`, [userId]),
     query<Grant>(
       `SELECT permission, intramural_id AS "intramuralId", expires_at AS "expiresAt"
@@ -148,11 +173,16 @@ export async function loadMe(userId: number): Promise<(Me & { tokenVersion: numb
           [userId],
         )
       : Promise.resolve([]),
+    row.role === "admin" && !isRealSuperAdmin
+      ? query<{ restriction: Restriction }>(`SELECT restriction FROM admin_restrictions WHERE user_id = $1`, [userId])
+      : Promise.resolve([]),
   ]);
   return {
     ...row,
     role: isRealSuperAdmin ? "super_admin" : row.role,
     isSuperAdmin,
+    isRealSuperAdmin,
+    restrictions: restricted.map((r) => r.restriction).filter((r) => r in RESTRICTIONS),
     status: isRealSuperAdmin ? "active" : row.status,
     intramurals: assigned.map((a) => a.id),
     grants,
@@ -167,9 +197,57 @@ export function me(req: Request): Me {
   return found;
 }
 
+// ---- parent preview tokens ---------------------------------------------------------
+// pv.{parentId}.{adminId}.{issuedAt}.{hmac}: lets a Super Admin (or permitted
+// Admin) open the parent portal exactly as that parent sees it, read-only, for 30 minutes.
+
+const PREVIEW_MS = 30 * 60 * 1000;
+
+export function issuePreviewToken(parentId: number, adminId: number): string {
+  const payload = `pv.${parentId}.${adminId}.${Date.now()}`;
+  return `${payload}.${sign(payload)}`;
+}
+
+function readPreviewToken(token: string): { parentId: number; adminId: number } | null {
+  const parts = token.split(".");
+  if (parts.length !== 5 || parts[0] !== "pv") return null;
+  const expected = Buffer.from(sign(parts.slice(0, 4).join(".")));
+  const given = Buffer.from(parts[4]);
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
+  const [parentId, adminId, issued] = parts.slice(1, 4).map(Number);
+  if (!Number.isInteger(parentId) || !Number.isInteger(adminId) || Date.now() - issued > PREVIEW_MS) return null;
+  return { parentId, adminId };
+}
+
+/** Admins have a power unless a Super Admin switched it off. */
+export function allowed(user: Me, restriction: Restriction): boolean {
+  if (!user.isSuperAdmin) return false;
+  return !user.restrictions.includes(restriction);
+}
+
+export function requireAllowed(user: Me, restriction: Restriction): void {
+  if (!user.isSuperAdmin) throw new HttpError(403, "Only an Admin or Super Admin can do this");
+  if (user.restrictions.includes(restriction)) throw new HttpError(403, `A Super Admin has switched off "${RESTRICTIONS[restriction].label}" for your account`);
+}
+
+export function requireRealSuperAdmin(user: Me): void {
+  if (!user.isRealSuperAdmin) throw new HttpError(403, "Only the Super Admin can do this");
+}
+
 /** Every API route except sign-up, sign-in, public pages and the M-PESA callback sits behind this. */
 export async function requireUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization ?? "";
+  if (header.startsWith("Bearer pv.")) {
+    const pv = readPreviewToken(header.slice(7));
+    const admin = pv ? await loadMe(pv.adminId) : null;
+    const parent = pv && admin && allowed(admin, "parents.preview") && admin.status === "active" ? await loadMe(pv.parentId) : null;
+    if (!parent || parent.role !== "parent") throw new HttpError(401, "This preview has ended. Open it again from Creator Control.");
+    // Read-only: a preview can look, never change anything.
+    if (req.method !== "GET") throw new HttpError(403, "This is a preview. Nothing can be changed here.");
+    (req as Request & { me?: Me }).me = { ...parent, previewBy: admin!.id };
+    next();
+    return;
+  }
   const token = header.startsWith("Bearer ") ? readToken(header.slice(7)) : null;
   const found = token ? await loadMe(token.userId) : null;
   if (!found || found.tokenVersion !== token!.version) throw new HttpError(401, "Please sign in");
@@ -218,10 +296,14 @@ export function canSeeIntramural(user: Me, ref: IntramuralRef): boolean {
 
 /** Can this person do `permission` in this intramural? */
 export function can(user: Me, permission: Permission, ref: IntramuralRef): boolean {
-  if (user.isSuperAdmin) return true;
+  if (user.isSuperAdmin) return !revokedForAdmin(user, permission);
   if (user.role === "parent" || !canSeeIntramural(user, ref)) return false;
   if ((STAFF_BASE as readonly string[]).includes(permission)) return true;
   return hasGrant(user, permission, ref.id);
+}
+
+function revokedForAdmin(user: Me, permission: string): boolean {
+  return user.restrictions.some((r) => (RESTRICTIONS[r].permissions as readonly string[]).includes(permission));
 }
 
 export async function requireSee(user: Me, intramuralId: number): Promise<IntramuralRef> {

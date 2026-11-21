@@ -14,6 +14,7 @@ import { mpesaCallbackRoutes, paymentRoutes } from "./routes/payments.js";
 import { airtableRoutes } from "./routes/airtable.js";
 import { syncRoutes } from "./routes/sync.js";
 import { reportRoutes } from "./routes/reports.js";
+import { controlRoutes, publicControlRoutes } from "./routes/control.js";
 
 export function createApp(webDir?: string) {
   const app = express();
@@ -44,11 +45,11 @@ export function createApp(webDir?: string) {
     res.json({ ok: true });
   });
   // No sign-in needed: onboarding, sign-in, and Safaricom's callback.
-  api.use(publicAuthRoutes, mpesaCallbackRoutes);
+  api.use(publicAuthRoutes, mpesaCallbackRoutes, publicControlRoutes);
   // Everything else needs a signed-in person.
   api.use(accountRoutes);
   api.use(requireUser);
-  api.use(creatorRoutes, peopleRoutes, intramuralRoutes, sessionRoutes, playerRoutes, coachingRoutes, paymentRoutes, airtableRoutes, syncRoutes, reportRoutes);
+  api.use(controlRoutes, creatorRoutes, peopleRoutes, intramuralRoutes, sessionRoutes, playerRoutes, coachingRoutes, paymentRoutes, airtableRoutes, syncRoutes, reportRoutes);
   api.use((_req, res) => {
     res.status(404).json({ error: "Not found" });
   });

@@ -459,6 +459,107 @@ describe("Nov 2026 updates", () => {
   });
 });
 
+describe("Dec 2026 updates", () => {
+  it("parents and staff sign in through separate doors", async () => {
+    const asParent = await api().post("/api/auth/login").send({ identifier: "kate@test.org", password: "password1", portal: "parents" });
+    expect(asParent.status).toBe(403);
+    expect(asParent.body.code).toBe("use_staff_login");
+    const asStaff = await api().post("/api/auth/login").send({ identifier: "parent@test.org", password: "password1", portal: "staff" });
+    expect(asStaff.body.code).toBe("use_parent_portal");
+    await api().post("/api/auth/login").send({ identifier: "parent@test.org", password: "password1", portal: "parents" }).expect(200);
+  });
+
+  it("parents only ever reach their own children (403 for any other id)", async () => {
+    for (const path of [
+      `/api/players/${otherChildId}/progress`, `/api/players/${otherChildId}/overview`, `/api/players/${otherChildId}/account`,
+      `/api/intramurals/${rafiki}/players`, `/api/intramurals/${rafiki}/tally`, `/api/intramurals/${rafiki}/payments`,
+      `/api/intramurals/${rafiki}/reports`, `/api/sessions/${sessionId}/attendance`, `/api/analytics/attendance`, "/api/creator/users",
+    ]) {
+      expect([path, (await api().get(path).set(auth(parent))).status]).toEqual([path, 403]);
+    }
+    await api().get(`/api/players/${childId}/overview`).set(auth(parent)).expect(200);
+  });
+
+  it("View as Parent: a read-only preview of exactly that parent's portal", async () => {
+    const { token } = (await api().post(`/api/creator/parents/${parent.id}/preview-token`).set(auth(admin))).body;
+    const preview = { Authorization: `Bearer ${token}` };
+    const kids = (await api().get("/api/parent/children").set(preview)).body.children;
+    expect(kids.map((k: { id: number }) => k.id)).toContain(childId);
+    expect((await api().get(`/api/players/${otherChildId}/progress`).set(preview)).status).toBe(403);
+    expect((await api().post("/api/notifications/read").set(preview).send({})).status).toBe(403);
+    expect((await api().post(`/api/creator/parents/${parent.id}/preview-token`).set(auth(coach))).status).toBe(403);
+  });
+
+  it("Privilege Control: admins equal by default; the Super Admin can switch powers off", async () => {
+    await api().get(`/api/intramurals/${rafiki}/payments`).set(auth(admin)).expect(200);
+    expect((await api().get("/api/control/privileges").set(auth(admin))).status).toBe(403);
+    const list = (await api().get("/api/control/privileges").set(auth(creator))).body;
+    expect(list.admins.find((a: { id: number }) => a.id === admin.id).restrictions).toEqual([]);
+    await api().put(`/api/control/privileges/${admin.id}`).set(auth(creator)).send({ restrictions: ["payments.view", "intramurals.edit", "analytics.view", "parents.preview"] }).expect(200);
+    expect((await api().get(`/api/intramurals/${rafiki}/payments`).set(auth(admin))).status).toBe(403);
+    expect((await api().patch(`/api/intramurals/${rafiki}`).set(auth(admin)).send({ location: "x" })).status).toBe(403);
+    expect((await api().get("/api/analytics/attendance").set(auth(admin))).status).toBe(403);
+    expect((await api().post(`/api/creator/parents/${parent.id}/preview-token`).set(auth(admin))).status).toBe(403);
+    const me = (await api().get("/api/me").set(auth(admin))).body;
+    expect(me.restrictions).toContain("payments.view");
+    // Admins cannot promote themselves out of it, or touch other admin accounts.
+    expect((await api().post("/api/creator/users").set(auth(admin)).send({ name: "Sneaky", email: "s@test.org", role: "super_admin", countryId: KE })).status).toBe(403);
+    await api().put(`/api/control/privileges/${admin.id}`).set(auth(creator)).send({ restrictions: [] }).expect(200);
+    await api().get(`/api/intramurals/${rafiki}/payments`).set(auth(admin)).expect(200);
+  });
+
+  it("Payment Configuration: only the Super Admin sets it; parents pay exactly that", async () => {
+    const cfg = { termLabel: "Term 1 2027", feeAmount: 3000, method: "paybill", paybill: "174379", till: "", accountRefFormat: "{CODE}-{CHILD}", deadline: "2027-02-01", instructions: "Pay by 1 Feb." };
+    expect((await api().put(`/api/control/payment-config/${rafiki}`).set(auth(admin)).send(cfg)).status).toBe(403);
+    await api().put(`/api/control/payment-config/${rafiki}`).set(auth(creator)).send(cfg).expect(200);
+    const o = (await api().get(`/api/players/${childId}/overview`).set(auth(parent))).body;
+    expect(o.payment).toMatchObject({ termLabel: "Term 1 2027", termFee: 3000, paybill: "174379", accountReference: "RC-AMANI" });
+    expect(["unpaid", "partial"]).toContain(o.payment.status);
+    // The parent asks for KES 1; the prompt is for what the Super Admin set.
+    const start = await api().post("/api/payments/mpesa").set(auth(parent)).send({ playerId: childId, phone: "0711111111", amount: 1 });
+    expect(start.status).toBe(201);
+    expect(start.body.amount).toBe(o.payment.balance);
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await api().get(`/api/players/${childId}/overview`).set(auth(parent))).body.payment.status).toBe("paid");
+    // Changing the fee updates every child's term charge.
+    await api().put(`/api/control/payment-config/${rafiki}`).set(auth(creator)).send({ ...cfg, feeAmount: 3500 }).expect(200);
+    expect((await api().get(`/api/players/${childId}/overview`).set(auth(parent))).body.payment.balance).toBe(500);
+  });
+
+  it("per-school Payments: totals, receipts, phones and status filters", async () => {
+    const all = (await api().get(`/api/intramurals/${rafiki}/payments`).set(auth(admin))).body;
+    expect(all.totals.collected).toBeGreaterThan(0);
+    expect(all.records.some((r: { receipt: string; phone: string }) => r.receipt && r.phone)).toBe(true);
+    const completed = (await api().get(`/api/intramurals/${rafiki}/payments?status=completed`).set(auth(admin))).body;
+    expect(completed.records.every((r: { status: string }) => r.status === "completed")).toBe(true);
+    const unpaid = (await api().get(`/api/intramurals/${rafiki}/payments?status=unpaid`).set(auth(admin))).body;
+    expect(unpaid.balances.every((b: { balance: number }) => b.balance > 0)).toBe(true);
+    expect(unpaid.balances.find((b: { playerId: number }) => b.playerId === otherChildId)).toBeTruthy();
+  });
+
+  it("the Register a Child link is public and set by the Super Admin", async () => {
+    expect((await api().put("/api/control/registration").set(auth(admin)).send({ url: "https://airtable.com/x/y" })).status).toBe(403);
+    await api().put("/api/control/registration").set(auth(creator)).send({ url: "https://airtable.com/appA/shrB" }).expect(200);
+    const pub = (await api().get("/api/registration")).body;
+    expect(pub.url).toBe("https://airtable.com/appA/shrB");
+    expect(pub.programs.length).toBeGreaterThan(0);
+  });
+
+  it("edits an intramural's term dates; analytics group by date and by month, with CSV", async () => {
+    await api().patch(`/api/intramurals/${rafiki}`).set(auth(admin)).send({ termStart: "2020-01-01", termEnd: "2030-12-31" }).expect(200);
+    await api().put(`/api/sessions/${sessionId}/attendance`).set(auth(admin)).send({ entries: [{ playerId: otherChildId, status: "excused", recordedAt: new Date().toISOString() }] }).expect(200);
+    const term = (await api().get(`/api/analytics/attendance?view=term&intramuralId=${rafiki}`).set(auth(admin))).body;
+    expect(term.points.length).toBeGreaterThan(0);
+    expect(term.kpis.sessionsHeld).toBeGreaterThan(0);
+    const year = (await api().get(`/api/analytics/attendance?view=year&year=${new Date().getFullYear()}`).set(auth(admin))).body;
+    expect(year.points).toHaveLength(12);
+    const csv = await api().get(`/api/analytics/attendance?view=year&format=csv`).set(auth(admin));
+    expect(csv.headers["content-type"]).toMatch(/text\/csv/);
+    expect(csv.text).toMatch(/Month,Present,Absent/);
+    expect((await api().get("/api/analytics/attendance").set(auth(coach))).status).toBe(403);
+  });
+});
+
 describe("super admin metrics", () => {
   it("reports impact per country", async () => {
     const m = (await api().get("/api/creator/metrics").set(auth(creator))).body;

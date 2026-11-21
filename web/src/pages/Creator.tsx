@@ -1,15 +1,17 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Globe2, KeyRound, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { Copy, Eye, Globe2, KeyRound, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { openPreview, PORTAL_URL } from "../lib/portal";
+import { PaymentConfiguration, PrivilegeControl } from "./Control";
 import { api } from "../lib/api";
-import { useAuth } from "../lib/auth";
+import { allowed, useAuth } from "../lib/auth";
 import { AGE_GROUPS, dateTime12, money, WEEKDAYS } from "../lib/format";
 import { Empty, ErrorNote, Modal, NameInput, Notice, PageTitle, Spinner, Tabs } from "../components/ui";
 import { ChildDashboard, type Child } from "./Parent";
 
 const ROLE_LABEL: Record<string, string> = { super_admin: "Super Admin", admin: "Admin", coach: "Coach", parent: "Parent" };
-type Tab = "staff" | "parents" | "places" | "impact" | "audit";
+type Tab = "staff" | "parents" | "payments" | "privileges" | "places" | "impact" | "audit";
 
 /**
  * Creator Control: Admins and Super Admins (equal powers).
@@ -20,17 +22,25 @@ export function CreatorControl() {
   const { tab } = useParams();
   const nav = useNavigate();
   if (!me?.isSuperAdmin) return <ErrorNote error={new Error("Creator Control is for Admins and Super Admins.")} />;
-  const current = (["staff", "parents", "places", "impact", "audit"].includes(tab ?? "") ? tab : "staff") as Tab;
+  // Each area follows the Super Admin's Privilege Control switches for this Admin.
+  const tabs = ([
+    allowed(me, "coaches.manage") && { id: "staff", label: "Staff & Coaches" },
+    (allowed(me, "parents.manage") || allowed(me, "parents.preview")) && { id: "parents", label: "Parents" },
+    { id: "payments", label: "Payments & registration" },
+    me.isRealSuperAdmin && { id: "privileges", label: "Privilege Control" },
+    allowed(me, "intramurals.edit") && { id: "places", label: "Countries & schools" },
+    { id: "impact", label: "Impact" },
+    { id: "audit", label: "Activity log" },
+  ].filter(Boolean)) as { id: Tab; label: string }[];
+  const current = (tabs.find((t) => t.id === tab)?.id ?? tabs[0].id) as Tab;
   return (
     <>
-      <PageTitle banner title="Creator Control" sub="Staff, coaches, parents and schools across Ambassadors Football." />
-      <Tabs
-        tabs={[{ id: "staff", label: "Staff & Coaches" }, { id: "parents", label: "Parents" }, { id: "places", label: "Countries & schools" }, { id: "impact", label: "Impact" }, { id: "audit", label: "Activity log" }]}
-        value={current}
-        onChange={(t) => nav(`/creator/${t}`, { replace: true })}
-      />
+      <PageTitle banner title="Creator Control" sub="Staff, coaches, parents, payments and schools across Ambassadors Football." />
+      <Tabs tabs={tabs} value={current} onChange={(t) => nav(`/creator/${t}`, { replace: true })} />
       {current === "staff" && <Staff />}
       {current === "parents" && <Parents />}
+      {current === "payments" && <PaymentConfiguration />}
+      {current === "privileges" && <PrivilegeControl />}
       {current === "places" && <Places />}
       {current === "impact" && <Impact />}
       {current === "audit" && <Audit />}
@@ -302,8 +312,25 @@ function CreatePerson({ kind, onClose, onSaved }: { kind: "staff" | "parent"; on
 // ---- Parents -----------------------------------------------------------------------------
 
 function Parents() {
+  const { me } = useAuth();
   const qc = useQueryClient();
-  const parents = useQuery({ queryKey: ["creator-parents"], queryFn: () => api<any[]>("/creator/parents") });
+  const [copied, setCopied] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const canPreview = allowed(me, "parents.preview");
+  const canManage = allowed(me, "parents.manage");
+  const viewAs = async (id: number) => {
+    setPreviewError("");
+    try {
+      const r = await api<{ token: string }>(`/creator/parents/${id}/preview-token`, { method: "POST" });
+      openPreview(r.token);
+    } catch (e) {
+      setPreviewError((e as Error).message);
+    }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(PORTAL_URL); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* ignore */ }
+  };
+  const parents = useQuery({ queryKey: ["creator-parents"], queryFn: () => api<any[]>("/creator/parents"), enabled: canManage || canPreview });
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<any | null>(null);
   const [creating, setCreating] = useState(false);
@@ -312,24 +339,35 @@ function Parents() {
   const list = parents.data!.filter((p) => `${p.name} ${p.email} ${p.phone ?? ""} ${p.children.map((c: any) => c.name).join(" ")}`.toLowerCase().includes(q.toLowerCase()));
   return (
     <>
+      <div className="sheet mb-4">
+        <p className="font-bold text-navy">Parent portal link</p>
+        <p className="text-sm text-slate">Parents sign in here, separately from coaches and admins. Share this link with them.</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <code className="min-w-0 flex-1 truncate rounded-lg bg-page px-3 py-2 text-sm">{PORTAL_URL}</code>
+          <button className="btn-ghost min-h-10" onClick={copy}><Copy className="h-4 w-4" /> {copied ? "Copied" : "Copy"}</button>
+          <a className="btn-ghost min-h-10" href={`${PORTAL_URL}/`} target="_blank" rel="noopener">Open</a>
+        </div>
+        {canPreview && <p className="mt-2 text-sm text-slate">To see exactly what one parent sees, choose View as parent next to their name. It opens their portal read-only in a new tab for 30 minutes.</p>}
+        {previewError && <Notice tone="bad">{previewError}</Notice>}
+      </div>
       <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_auto]">
         <div className="relative"><Search className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-slate" aria-hidden /><input className="field pl-10" placeholder="Search parent or child" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search parents" /></div>
-        <button className="btn-primary" onClick={() => setCreating(true)}><UserPlus className="h-4 w-4" /> Add a parent</button>
+        {canManage && <button className="btn-primary" onClick={() => setCreating(true)}><UserPlus className="h-4 w-4" /> Add a parent</button>}
       </div>
       {list.length === 0 ? <Empty>No parents yet. Add one, or they can sign up themselves.</Empty> : (
         <ul className="grid gap-2">
           {list.map((p) => (
             <li key={p.id} className="sheet">
               <div className="flex items-start gap-3">
-                <button className="min-w-0 flex-1 text-left" onClick={() => setOpen(p)}>
+                <button className="min-w-0 flex-1 text-left" onClick={() => canManage && setOpen(p)}>
                   <p className="font-bold text-navy">{p.name} {p.status !== "active" && <span className={`chip ml-1 ${p.status === "pending" ? "bg-warn/15 text-warn" : "bg-bad/10 text-bad"}`}>{p.status}</span>}</p>
                   <p className="truncate text-sm text-slate">{p.phone ?? "No phone"} · {p.email}</p>
                   <p className="mt-1 text-sm">
                     {p.children.length ? p.children.map((c: any) => `${c.name} (${c.category || "?"}, ${c.intramuralName})${c.verified ? "" : " · to confirm"}`).join("; ") : <span className="text-slate">No children linked</span>}
                   </p>
                 </button>
-                {p.children.some((c: any) => c.verified) && (
-                  <Link to={`/creator/parents/${p.id}/preview`} className="btn-ghost min-h-9 px-3" aria-label={`Preview ${p.name}'s dashboard`}><Eye className="h-4 w-4" /> Preview</Link>
+                {canPreview && (
+                  <button onClick={() => viewAs(p.id)} className="btn-ghost min-h-9 shrink-0 px-3" aria-label={`View as ${p.name}`}><Eye className="h-4 w-4" /> View as parent</button>
                 )}
               </div>
             </li>

@@ -104,7 +104,12 @@ publicAuthRoutes.post("/auth/signup", async (req, res) => {
   res.status(201).json({ token: issueToken(user.id, user.v), me: await loadMe(user.id) });
 });
 
-const loginInput = z.object({ identifier: z.string().trim().min(3), password: z.string().min(1) });
+const loginInput = z.object({
+  identifier: z.string().trim().min(3),
+  password: z.string().min(1),
+  /** Which door they used: the parent portal (/parents) or the staff sign-in. */
+  portal: z.enum(["parents", "staff"]).optional(),
+});
 
 publicAuthRoutes.post("/auth/login", async (req, res) => {
   const input = loginInput.parse(req.body);
@@ -114,8 +119,8 @@ publicAuthRoutes.post("/auth/login", async (req, res) => {
   const phone = byEmail ? null : normalizePhone(input.identifier);
   const user = await one(
     byEmail
-      ? `SELECT id, password_hash, token_version AS v FROM users WHERE lower(email) = $1`
-      : `SELECT id, password_hash, token_version AS v FROM users WHERE phone = $1`,
+      ? `SELECT id, role, password_hash, token_version AS v FROM users WHERE lower(email) = $1`
+      : `SELECT id, role, password_hash, token_version AS v FROM users WHERE phone = $1`,
     [byEmail ? normalizeEmail(input.identifier) : phone],
   );
   if (!user || !(await bcrypt.compare(input.password, user.password_hash))) {
@@ -123,6 +128,13 @@ publicAuthRoutes.post("/auth/login", async (req, res) => {
     throw new HttpError(401, "That email/phone and password do not match");
   }
   clearLoginFailures(key);
+  // Parents and staff sign in through separate doors.
+  if (input.portal === "parents" && user.role !== "parent") {
+    throw new HttpError(403, "This is the parent portal. Coaches and admins sign in on the staff page.", { code: "use_staff_login" });
+  }
+  if (input.portal === "staff" && user.role === "parent") {
+    throw new HttpError(403, "Parents sign in through the parent portal.", { code: "use_parent_portal" });
+  }
   res.json({ token: issueToken(user.id, user.v), me: await loadMe(user.id) });
 });
 

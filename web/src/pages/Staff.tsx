@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarPlus, ChevronRight, ClipboardCheck, FileDown, LoaderCircle, Users } from "lucide-react";
+import { BarChart3, CalendarPlus, ChevronRight, ClipboardCheck, FileDown, LoaderCircle, Pencil, Users } from "lucide-react";
+import { EditIntramuralModal } from "../components/EditIntramural";
+import { PollBreakdown } from "../components/PollBreakdown";
+import { AttendanceAnalytics } from "./Analytics";
 import { api, download, ApiError } from "../lib/api";
 import { cached, enqueue, useOffline } from "../lib/offline";
-import { useAuth } from "../lib/auth";
+import { allowed, useAuth } from "../lib/auth";
 import { useIntramural, useIntramurals, useUpcoming, type Intramural, type Session } from "../lib/queries";
 import { dateRange, longDate, sessionLabel, shortDate, time12, WEEKDAYS } from "../lib/format";
 import { Crest, Empty, ErrorNote, FixtureBoard, Modal, Notice, PageTitle, PendingBadge, SectionTitle, Spinner } from "../components/ui";
@@ -12,6 +15,7 @@ import { Crest, Empty, ErrorNote, FixtureBoard, Modal, Notice, PageTitle, Pendin
 export function StaffHome() {
   const { me } = useAuth();
   const list = useIntramurals();
+  const [editing, setEditing] = useState<number | null>(null);
   if (list.isLoading) return <Spinner />;
   if (list.error) return <ErrorNote error={list.error} onRetry={() => list.refetch()} />;
   const items = list.data!;
@@ -40,8 +44,14 @@ export function StaffHome() {
           <SectionTitle>Your {items.length === 1 ? "school" : "schools and clubs"}</SectionTitle>
           <ul className="grid gap-3">
             {items.map((i) => (
-              <li key={i.id}>
-                <Link to={`/i/${i.id}`} className="sheet flex items-center gap-3 hover:ring-brand">
+              <li key={i.id} className="relative">
+                {allowed(me, "intramurals.edit") && (
+                  <button onClick={() => setEditing(i.id)} aria-label={`Edit ${i.name}`}
+                    className="absolute right-4 top-1/2 z-10 -translate-y-1/2 rounded-full bg-page px-3 py-1.5 text-sm font-semibold text-navy ring-1 ring-line hover:bg-white">
+                    <Pencil className="mr-1 inline h-3.5 w-3.5" aria-hidden />Edit
+                  </button>
+                )}
+                <Link to={`/i/${i.id}`} className="sheet flex items-center gap-3 pr-28 hover:ring-brand">
                   <Crest i={i} size={46} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[17px] font-bold text-navy">{i.name}</p>
@@ -49,12 +59,21 @@ export function StaffHome() {
                       {WEEKDAYS[i.sessionWeekday]}s, {time12(i.sessionStart)}{me!.isSuperAdmin ? ` · ${i.countryName}` : ""}
                     </p>
                   </div>
-                  {i.nextSession && <span className="hidden text-sm font-semibold text-slate sm:block">Next: {shortDate(i.nextSession.date)}</span>}
+                  {i.nextSession && !allowed(me, "intramurals.edit") && <span className="hidden text-sm font-semibold text-slate sm:block">Next: {shortDate(i.nextSession.date)}</span>}
                   <ChevronRight className="h-5 w-5 text-slate" aria-hidden />
                 </Link>
               </li>
             ))}
           </ul>
+          {editing !== null && <EditIntramuralModal id={editing} open onClose={() => setEditing(null)} />}
+          {allowed(me, "analytics.view") && (
+            <>
+              <SectionTitle action={<Link to="/analytics" className="text-sm font-semibold text-white underline"><BarChart3 className="mr-1 inline h-4 w-4" aria-hidden />Full page</Link>}>
+                Attendance analytics
+              </SectionTitle>
+              <AttendanceAnalytics />
+            </>
+          )}
         </>
       )}
     </>
@@ -181,14 +200,7 @@ export function SessionPage() {
           </button>
         ))}
       </div>
-      {(s.poll ?? []).length > 0 && (
-        <details className="mt-2 text-sm text-slate">
-          <summary className="cursor-pointer font-semibold">Who answered ({s.poll.length})</summary>
-          <ul className="mt-2 grid gap-1">
-            {s.poll.map((p: any) => <li key={p.userId}>{p.name}: {options.find((o) => o.id === p.optionId)?.label}</li>)}
-          </ul>
-        </details>
-      )}
+      <PollBreakdown options={options} poll={s.poll ?? []} coaches={s.coaches ?? []} />
 
       <SectionTitle>Coach roles</SectionTitle>
       <ul className="sheet divide-y divide-line py-1">

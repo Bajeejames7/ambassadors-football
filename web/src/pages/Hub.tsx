@@ -1,4 +1,6 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { Pencil } from "lucide-react";
+import { EditIntramuralModal } from "../components/EditIntramural";
 import { cssPhoto, photoForHubTab } from "../lib/photos";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -36,9 +38,21 @@ export function IntramuralHub() {
     ...(p.includes("schedules.edit") || p.includes("airtable.manage") ? [{ id: "setup" as Tab, label: "Setup" }] : []),
   ];
   const current = (tabs.find((t) => t.id === tab)?.id ?? "sessions") as Tab;
+  return <HubBody i={i} tabs={tabs} current={current} onTab={(t) => nav(`/i/${i.id}/${t}`, { replace: true })} />;
+}
+
+function HubBody({ i, tabs, current, onTab }: { i: Intramural; tabs: { id: Tab; label: string }[]; current: Tab; onTab: (t: Tab) => void }) {
+  const [editing, setEditing] = useState(false);
+  const photo = cssPhoto(photoForHubTab(current, i.name));
+  // The full-page photo follows the tab (and the school, on Sessions).
+  useEffect(() => {
+    document.documentElement.style.setProperty("--tab-photo", photo);
+    return () => { document.documentElement.style.removeProperty("--tab-photo"); };
+  }, [photo]);
+  const canEdit = i.myPermissions.includes("schedules.edit");
   return (
     <>
-      <div className="photo-navy mb-5 flex items-center gap-3 rounded-[26px] px-4 pb-4 pt-8 text-white" style={{ "--photo": cssPhoto(photoForHubTab(current, i.name)) } as CSSProperties}>
+      <div className="photo-navy mb-5 flex items-center gap-3 rounded-[26px] px-4 pb-4 pt-8 text-white" style={{ "--photo": photo } as CSSProperties}>
         <Crest i={i} size={52} />
         <div className="min-w-0">
           <h1 className="display truncate text-[2rem]">{i.name}</h1>
@@ -47,8 +61,14 @@ export function IntramuralHub() {
             {i.myAgeGroups && i.myAgeGroups.length > 0 ? ` · You coach ${i.myAgeGroups.join(", ")}` : ""}
           </p>
         </div>
+        {canEdit && (
+          <button onClick={() => setEditing(true)} className="ml-auto shrink-0 self-start rounded-full bg-white/15 px-3 py-1.5 text-sm font-semibold text-white ring-1 ring-white/30 hover:bg-white/25">
+            <Pencil className="mr-1 inline h-3.5 w-3.5" aria-hidden />Edit
+          </button>
+        )}
       </div>
-      <Tabs tabs={tabs} value={current} onChange={(t) => nav(`/i/${i.id}/${t}`, { replace: true })} />
+      {editing && <EditIntramuralModal id={i.id} open onClose={() => setEditing(false)} />}
+      <Tabs tabs={tabs} value={current} onChange={onTab} />
       {current === "sessions" && <SessionsTab i={i} />}
       {current === "players" && <PlayersTab i={i} />}
       {current === "reports" && <ReportsTab i={i} />}

@@ -3,6 +3,7 @@ import { one, query } from "./db.js";
 import { addDays, nextWeekday, today, seasonOf } from "./util.js";
 import { ensureUpcomingSessions } from "./routes/intramurals.js";
 import { ADMIN_PERMISSIONS } from "./auth.js";
+import { ensureTermFees } from "./lib/termfees.js";
 
 /**
  * Demo people and a season of activity for Rafiki, so every screen has
@@ -201,4 +202,62 @@ export async function seedDemoExtras(): Promise<void> {
       [parent.id, neema.id],
     );
   }
+}
+
+/**
+ * Demo top-up for the Dec 2026 update: term dates, the Super Admin's payment
+ * details for each school, and a year of attendance history for the analytics
+ * graphs. Runs once (app_settings marker), only on demo databases.
+ */
+export async function seedDemoTerm(): Promise<void> {
+  const parent = await one(`SELECT id FROM users WHERE email = $1`, [DEMO_ACCOUNTS[3].email]);
+  if (!parent) return;
+  if (await one(`SELECT 1 FROM app_settings WHERE key = 'demo_term_seeded'`)) return;
+  const year = Number(today().slice(0, 4));
+
+  await query(
+    `UPDATE intramurals SET term_start = make_date($1, 9, 1), term_end = make_date($1, 11, 27) WHERE program_mode = 'school' AND term_start IS NULL`,
+    [year],
+  );
+  await query(`UPDATE intramurals SET term_start = make_date($1, 9, 5), term_end = make_date($1, 12, 12) WHERE program_mode = 'club' AND term_start IS NULL`, [year]);
+
+  await query(
+    `INSERT INTO payment_configs (intramural_id, term_label, fee_amount, method, paybill, account_ref_format, deadline, instructions)
+     SELECT i.id, v.term, v.fee, 'paybill', '174379', '{CODE}-{CHILD}', make_date($1::int, 12, 5), v.note
+       FROM intramurals i JOIN (VALUES
+         ('rafiki',    'Term 3 ' || $1, 3000, 'Covers every Tuesday session this term, kit wash and the end-of-term awards.'),
+         ('rosslyn',   'Summer Camp ' || $1, 4500, 'Covers all 3 camp days, lunch and a camp T-shirt.'),
+         ('icc-imara', 'Term 3 ' || $1, 2000, 'Covers weekly sessions on the roof pitches.'),
+         ('daniels',   'Term 3 ' || $1, 2500, 'Covers weekly sessions and match-day transport.')
+       ) AS v(slug, term, fee, note) ON v.slug = i.slug
+     ON CONFLICT (intramural_id) DO NOTHING`,
+    [String(year)],
+  );
+  await ensureTermFees((await query<{ id: number }>(`SELECT id FROM intramurals`)).map((r) => r.id));
+
+  // Weekly trainings since mid-January (school holidays in April, August and December off).
+  await query(
+    `INSERT INTO sessions (intramural_id, date, kind, start_time, end_time, location, dress_code, schedule)
+     SELECT i.id, d::date, 'training', i.session_start, i.session_end, i.location, i.dress_code, i.default_schedule
+       FROM intramurals i,
+            generate_series(make_date($1, 1, 12), current_date - 1, interval '1 day') AS d
+      WHERE extract(dow FROM d) = i.session_weekday AND extract(month FROM d) NOT IN (4, 8, 12)
+     ON CONFLICT (intramural_id, date) WHERE kind = 'training' DO NOTHING`,
+    [year],
+  );
+  // Attendance for every past session that has none yet: a realistic, repeatable mix
+  // (the long rains in May and the cold in July dip a little).
+  await query(
+    `INSERT INTO attendance (session_id, player_id, status, recorded_at)
+     SELECT s.id, p.id,
+            CASE WHEN r < 0.74 + m THEN 'present' WHEN r < 0.80 + m THEN 'late' WHEN r < 0.93 THEN 'absent' ELSE 'excused' END,
+            s.date + time '17:00'
+       FROM sessions s JOIN players p ON p.intramural_id = s.intramural_id AND p.active
+       CROSS JOIN LATERAL (SELECT (abs(hashtext(s.id::text || '-' || p.id::text)) % 1000) / 1000.0 AS r,
+                                  CASE extract(month FROM s.date) WHEN 5 THEN -0.07 WHEN 7 THEN -0.05 WHEN 2 THEN 0.04 WHEN 9 THEN 0.05 ELSE 0 END AS m) x
+      WHERE s.date < current_date AND NOT s.cancelled AND s.kind = 'training'
+        AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.session_id = s.id)
+     ON CONFLICT DO NOTHING`,
+  );
+  await query(`INSERT INTO app_settings (key, value) VALUES ('demo_term_seeded', '1') ON CONFLICT DO NOTHING`);
 }

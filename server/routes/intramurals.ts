@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { HttpError, audit, can, me, requirePermission, requireSee, requireStaff, visibleIntramuralIds, intramuralRef } from "../auth.js";
 import { one, query } from "../db.js";
-import { sessionDayLabel, today, addDays, nextWeekday, hhmm } from "../util.js";
+import { sessionDayLabel, today, addDays, nextWeekday, hhmm, isDate } from "../util.js";
 
 export const intramuralRoutes = Router();
 
@@ -12,6 +12,7 @@ const INTRAMURAL_FIELDS = `
   to_char(i.session_end, 'HH24:MI') AS "sessionEnd", i.location, i.dress_code AS "dressCode",
   i.availability_options AS "availabilityOptions", i.default_roles AS "defaultRoles",
   i.default_schedule AS "defaultSchedule", i.teams, i.categories, i.archived, i.program_mode AS "programMode",
+  to_char(i.term_start, 'YYYY-MM-DD') AS "termStart", to_char(i.term_end, 'YYYY-MM-DD') AS "termEnd",
   i.country_id AS "countryId", c.name AS "countryName", c.currency, c.time_zone AS "timeZone", c.mpesa`;
 
 /**
@@ -129,6 +130,8 @@ const setupInput = z.object({
   categories: z.array(z.string().trim().min(1).max(40)).max(20),
   teams: z.array(z.object({ id: z.string().min(1).max(30), name: z.string().min(1).max(40), color: z.string().max(9) })).max(12),
   programMode: z.enum(["school", "club"]),
+  termStart: z.string().refine(isDate, "Pick a date").nullable(),
+  termEnd: z.string().refine(isDate, "Pick a date").nullable(),
   availabilityOptions: z
     .array(z.object({ id: z.string().min(1).max(40), label: z.string().min(1).max(120), tone: z.enum(["good", "ok", "bad"]) }))
     .min(2)
@@ -142,6 +145,7 @@ intramuralRoutes.patch("/intramurals/:id", async (req, res) => {
   await requirePermission(user, "schedules.edit", id);
   const s = setupInput.parse(req.body);
   if (s.sessionStart && s.sessionEnd && s.sessionEnd <= s.sessionStart) throw new HttpError(400, "The session must end after it starts");
+  if (s.termStart && s.termEnd && s.termEnd < s.termStart) throw new HttpError(400, "The term must end after it starts");
   const cols: Record<string, unknown> = {
     name: s.name, short_code: s.shortCode?.toUpperCase(), color: s.color, coordinator_name: s.coordinatorName,
     session_weekday: s.sessionWeekday, session_start: s.sessionStart, session_end: s.sessionEnd, location: s.location,
@@ -149,7 +153,7 @@ intramuralRoutes.patch("/intramurals/:id", async (req, res) => {
     default_schedule: s.defaultSchedule && JSON.stringify([...s.defaultSchedule].sort((a, b) => a.time.localeCompare(b.time))),
     default_roles: s.defaultRoles && JSON.stringify(s.defaultRoles), categories: s.categories && JSON.stringify(s.categories),
     teams: s.teams && JSON.stringify(s.teams), availability_options: s.availabilityOptions && JSON.stringify(s.availabilityOptions),
-    program_mode: s.programMode,
+    program_mode: s.programMode, term_start: s.termStart, term_end: s.termEnd,
   };
   const set = Object.entries(cols).filter(([, v]) => v !== undefined);
   if (set.length) {

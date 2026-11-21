@@ -7,7 +7,10 @@ import { AuthProvider, useAuth } from "./lib/auth";
 import { queryClient } from "./lib/queries";
 import { BASE } from "./lib/base";
 import { captureInstallPrompt } from "./lib/install";
+import { IN_PARENT_PORTAL, ROUTER_BASE, STAFF_PATH, PORTAL_PATH, takePreviewHandoff, usePortalManifest } from "./lib/portal";
 
+takePreviewHandoff();
+usePortalManifest();
 captureInstallPrompt();
 document.documentElement.style.setProperty("--hero-url", `url("${BASE}hero.jpg")`);
 import { Layout } from "./components/Layout";
@@ -15,10 +18,12 @@ import { DeleteAccountInfoPage, LoginPage, PrivacyPage, SignupPage } from "./pag
 import { ChildRoute, FeesPage, ParentHome } from "./pages/Parent";
 import { RegisterPage } from "./pages/Register";
 import { ParentPreview } from "./pages/Creator";
+import { WrongDoor } from "./pages/Portal";
 import { FieldIndex, SchedulePage, SessionPage, StaffHome } from "./pages/Staff";
 import { FieldCheckIn, QueuePage } from "./pages/Field";
 import { IntramuralHub, PlayerPage } from "./pages/Hub";
 import { CreatorControl } from "./pages/Creator";
+import { AnalyticsPage } from "./pages/Analytics";
 import { AccountPage, ChooseOwnPassword, NotificationsPage } from "./pages/Account";
 
 function Routed() {
@@ -33,8 +38,14 @@ function Routed() {
       </Routes>
     );
   }
-  if (me.mustChangePassword) return <ChooseOwnPassword />;
+  // Two doors: parents live under /parents; staff never use the parent portal.
   const parent = me.role === "parent";
+  if (parent && !IN_PARENT_PORTAL) {
+    location.replace(`${PORTAL_PATH}/`);
+    return null;
+  }
+  if (!parent && IN_PARENT_PORTAL) return <WrongDoor />;
+  if (me.mustChangePassword) return <ChooseOwnPassword />;
   return (
     <Routes>
       <Route path="/privacy" element={<PrivacyPage />} />
@@ -61,6 +72,7 @@ function Routed() {
             <Route path="s/:id" element={<SessionPage />} />
             <Route path="s/:id/field" element={<FieldCheckIn />} />
             <Route path="players/:id" element={<PlayerPage />} />
+            {me.isSuperAdmin && <Route path="analytics" element={<AnalyticsPage />} />}
             {me.isSuperAdmin && <Route path="creator" element={<CreatorControl />} />}
             {me.isSuperAdmin && <Route path="creator/:tab" element={<CreatorControl />} />}
             {me.isSuperAdmin && <Route path="creator/parents/:id/preview" element={<ParentPreview />} />}
@@ -76,7 +88,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <BrowserRouter basename={BASE.replace(/\/$/, "")}>
+        <BrowserRouter basename={ROUTER_BASE}>
           <Routed />
         </BrowserRouter>
       </AuthProvider>

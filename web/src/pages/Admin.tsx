@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, UserMinus, UserPlus, X } from "lucide-react";
 import { api } from "../lib/api";
 import { type Intramural } from "../lib/queries";
-import { AGE_GROUPS, money, PERMISSION_LABELS, time12, WEEKDAYS } from "../lib/format";
+import { AGE_GROUPS, dateTime12, money, PERMISSION_LABELS, time12, WEEKDAYS } from "../lib/format";
 import { Empty, ErrorNote, Modal, Notice, SectionTitle, Spinner } from "../components/ui";
 import { ScheduleEditor } from "./Staff";
 
@@ -212,7 +212,7 @@ export function PeopleTab({ i }: { i: Intramural }) {
   );
 }
 
-function Coaches({ i }: { i: Intramural }) {
+export function Coaches({ i }: { i: Intramural }) {
   const qc = useQueryClient();
   const p = i.myPermissions;
   const staff = useQuery({ queryKey: ["people", i.id], queryFn: () => api<any[]>(`/intramurals/${i.id}/people`) });
@@ -375,51 +375,129 @@ function ParentApprovals({ i }: { i: Intramural }) {
 
 // ---- Payments --------------------------------------------------------------------------------
 
+const PAY_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "completed", label: "Completed" },
+  { id: "pending", label: "Pending" },
+  { id: "unpaid", label: "Unpaid" },
+] as const;
+
+const STATUS_CHIP: Record<string, string> = {
+  completed: "bg-good/15 text-good", paid: "bg-good/15 text-good",
+  pending: "bg-brand/10 text-brand", partial: "bg-warn/15 text-warn",
+  unpaid: "bg-bad/10 text-bad", failed: "bg-bad/10 text-bad", cancelled: "bg-page text-slate", no_charge: "bg-page text-slate",
+};
+
+/**
+ * Payments for this school or club: totals, paid vs unpaid children, and every
+ * M-PESA record (receipt, phone, time). Refreshes every 10 seconds while open.
+ */
 export function PaymentsTab({ i }: { i: Intramural }) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["payments", i.id], queryFn: () => api<any>(`/intramurals/${i.id}/payments`) });
+  const [filter, setFilter] = useState<(typeof PAY_FILTERS)[number]["id"]>("all");
+  const q = useQuery({
+    queryKey: ["payments", i.id, filter],
+    queryFn: () => api<any>(`/intramurals/${i.id}/payments?status=${filter}`),
+    refetchInterval: 10_000,
+    placeholderData: (prev) => prev,
+  });
   const [bulk, setBulk] = useState(false);
   const [player, setPlayer] = useState<any | null>(null);
   const [unpaid, setUnpaid] = useState(false);
   if (q.isLoading) return <Spinner />;
   if (q.error) return <ErrorNote error={q.error} />;
-  const { balances, recent } = q.data;
-  const owed = balances.reduce((s: number, b: any) => s + Math.max(0, b.balance), 0);
-  const collected = recent.filter((r: any) => r.status === "completed").reduce((s: number, r: any) => s + Number(r.amount), 0);
+  const { balances, records, totals, config } = q.data;
   const refresh = () => void qc.invalidateQueries({ queryKey: ["payments", i.id] });
   return (
     <>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="sheet"><p className="text-sm font-semibold text-slate">Outstanding</p><p className="display mt-1 text-[2rem] text-navy">{money(owed, i.currency)}</p></div>
-        <div className="sheet"><p className="text-sm font-semibold text-slate">Recently collected</p><p className="display mt-1 text-[2rem] text-good">{money(collected, i.currency)}</p></div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="sheet !p-4"><p className="text-xs font-semibold text-slate">Collected</p><p className="display mt-1 text-[1.7rem] text-good">{money(totals.collected, i.currency)}</p></div>
+        <div className="sheet !p-4"><p className="text-xs font-semibold text-slate">Outstanding</p><p className="display mt-1 text-[1.7rem] text-navy">{money(totals.outstanding, i.currency)}</p></div>
+        <div className="sheet !p-4"><p className="text-xs font-semibold text-slate">Paid players</p><p className="display mt-1 text-[1.7rem] text-navy">{totals.paidPlayers}</p></div>
+        <div className="sheet !p-4"><p className="text-xs font-semibold text-slate">Unpaid players</p><p className="display mt-1 text-[1.7rem] text-bad">{totals.unpaidPlayers}</p></div>
       </div>
+      <p className="mt-2 text-sm text-slate">
+        {config?.termLabel ? `${config.termLabel}: ${config.feeAmount ? money(Number(config.feeAmount), i.currency) : "no fee set"} per child, set by the Super Admin.` : "No term fee set yet. The Super Admin sets it in Creator Control, Payments."}
+        {" "}Updates every 10 seconds.
+      </p>
       <div className="mt-3 flex flex-wrap gap-2">
         <button className="btn-primary" onClick={() => setUnpaid(true)}>Send unpaid alert</button>
-        <button className="btn-ghost" onClick={() => setBulk(true)}>Charge everyone (term fee, tournament…)</button>
+        <button className="btn-ghost" onClick={() => setBulk(true)}>Charge everyone (tournament, kit…)</button>
       </div>
       <UnpaidList i={i} />
-      <SectionTitle>Balances</SectionTitle>
-      <ul className="sheet divide-y divide-line py-1">
-        {balances.map((b: any) => (
-          <li key={b.playerId}>
-            <button className="flex w-full items-center justify-between gap-3 py-2.5 text-left" onClick={() => setPlayer(b)}>
-              <span><span className="font-semibold">{b.name}</span> <span className="text-sm text-slate">{b.category}</span></span>
-              <span className={`font-bold ${b.balance > 0 ? "text-navy" : "text-good"}`}>{money(b.balance, i.currency)}</span>
-            </button>
-          </li>
+
+      <div role="tablist" aria-label="Filter payments" className="mt-6 mb-3 flex flex-wrap gap-2">
+        {PAY_FILTERS.map((f) => (
+          <button key={f.id} role="tab" aria-selected={filter === f.id} onClick={() => setFilter(f.id)}
+            className={`rounded-full px-3.5 py-2 text-sm font-semibold ${filter === f.id ? "bg-navy text-white" : "bg-white text-slate ring-1 ring-line"}`}>
+            {f.label}{f.id === "pending" && totals.pending ? ` (${totals.pending})` : ""}
+          </button>
         ))}
-        {balances.length === 0 && <li className="py-3 text-slate">No players yet.</li>}
-      </ul>
-      <SectionTitle>Recent payments</SectionTitle>
-      <ul className="sheet divide-y divide-line py-1">
-        {recent.map((r: any) => (
-          <li key={r.id} className="flex items-center justify-between gap-3 py-2 text-[15px]">
-            <span>{r.playerName} <span className="text-xs text-slate">{r.method === "mpesa" ? `M-PESA ${r.receipt ?? ""}` : r.method}</span></span>
-            <span>{money(r.amount, i.currency)} <span className={`chip ${r.status === "completed" ? "bg-good/15 text-good" : r.status === "pending" ? "bg-warn/15 text-warn" : "bg-bad/10 text-bad"}`}>{r.status}</span></span>
-          </li>
-        ))}
-        {recent.length === 0 && <li className="py-3 text-slate">No payments yet.</li>}
-      </ul>
+      </div>
+
+      {filter === "unpaid" ? (
+        <ul className="sheet divide-y divide-line py-1">
+          {balances.map((b: any) => (
+            <li key={b.playerId}>
+              <button className="flex w-full items-center justify-between gap-3 py-2.5 text-left" onClick={() => setPlayer(b)}>
+                <span className="min-w-0">
+                  <span className="font-semibold">{b.name}</span> <span className="text-sm text-slate">{b.category}</span>
+                  <span className="block truncate text-xs text-slate">{b.parentPhones ? `Parent: ${b.parentPhones}` : "No parent phone on file"}</span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="block font-bold text-navy">{money(b.balance, i.currency)}</span>
+                  <span className={`chip ${STATUS_CHIP[b.status]}`}>{b.status === "partial" ? "part paid" : b.status}</span>
+                </span>
+              </button>
+            </li>
+          ))}
+          {balances.length === 0 && <li className="py-3 text-slate">Everyone has paid.</li>}
+        </ul>
+      ) : (
+        <div className="sheet overflow-x-auto !p-0">
+          <table className="w-full min-w-[640px] text-sm">
+            <thead className="border-b border-line text-left text-xs text-slate">
+              <tr>
+                <th className="px-4 py-2.5">Player</th><th className="px-2">Amount</th><th className="px-2">Status</th>
+                <th className="px-2">M-PESA receipt</th><th className="px-2">Parent phone</th><th className="px-4">Time</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {records.map((r: any) => (
+                <tr key={r.id}>
+                  <td className="px-4 py-2.5 font-semibold text-ink">{r.playerName}{r.feeTitle && <span className="block text-xs font-normal text-slate">{r.feeTitle}</span>}</td>
+                  <td className="px-2 tabular-nums">{money(Number(r.amount), i.currency)}</td>
+                  <td className="px-2"><span className={`chip ${STATUS_CHIP[r.status]}`}>{r.status}</span></td>
+                  <td className="px-2 font-mono text-xs">{r.receipt ?? (r.method === "mpesa" ? "" : r.method)}</td>
+                  <td className="px-2 tabular-nums">{r.phone ? `+${r.phone}` : ""}</td>
+                  <td className="px-4 text-xs text-slate">{dateTime12(r.completedAt ?? r.createdAt)}</td>
+                </tr>
+              ))}
+              {records.length === 0 && <tr><td colSpan={6} className="px-4 py-4 text-slate">No payments match this filter.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {filter !== "unpaid" && (
+        <>
+          <SectionTitle>Every child</SectionTitle>
+          <ul className="sheet divide-y divide-line py-1">
+            {balances.map((b: any) => (
+              <li key={b.playerId}>
+                <button className="flex w-full items-center justify-between gap-3 py-2.5 text-left" onClick={() => setPlayer(b)}>
+                  <span><span className="font-semibold">{b.name}</span> <span className="text-sm text-slate">{b.category}</span></span>
+                  <span className="flex items-center gap-2">
+                    <span className={`chip ${STATUS_CHIP[b.status]}`}>{b.status === "no_charge" ? "no fee" : b.status === "partial" ? "part paid" : b.status}</span>
+                    <span className={`font-bold ${b.balance > 0 ? "text-navy" : "text-good"}`}>{money(b.balance, i.currency)}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+            {balances.length === 0 && <li className="py-3 text-slate">No players yet.</li>}
+          </ul>
+        </>
+      )}
       {unpaid && <UnpaidForm i={i} players={balances} onClose={() => setUnpaid(false)} onSaved={() => { setUnpaid(false); void qc.invalidateQueries({ queryKey: ["unpaid-open", i.id] }); }} />}
       {bulk && <ChargeForm title="Charge every player" path={`/intramurals/${i.id}/fees`} categories={i.categories} onClose={() => setBulk(false)} onSaved={() => { setBulk(false); refresh(); }} />}
       {player && <PlayerCharge i={i} player={player} onClose={() => setPlayer(null)} onSaved={() => { setPlayer(null); refresh(); }} />}

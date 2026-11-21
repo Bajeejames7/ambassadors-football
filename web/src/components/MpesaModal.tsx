@@ -27,6 +27,8 @@ export function MpesaModal({ open, onClose, playerId, childName, amount: suggest
   const [stage, setStage] = useState<Stage>({ kind: "form" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Parents pay exactly what the Super Admin set; only admins can type an amount.
+  const fixed = me?.role === "parent";
 
   useEffect(() => {
     if (open) { setStage({ kind: "form" }); setError(""); setAmount(String(Math.ceil(suggested))); }
@@ -62,7 +64,7 @@ export function MpesaModal({ open, onClose, playerId, childName, amount: suggest
     setError("");
     setBusy(true);
     try {
-      const r = await api<{ paymentId: number }>("/payments/mpesa", { method: "POST", body: { playerId, phone, amount: Number(amount), feeItemId: feeItemId ?? null } });
+      const r = await api<{ paymentId: number }>("/payments/mpesa", { method: "POST", body: { playerId, phone, ...(fixed ? {} : { amount: Number(amount) }), feeItemId: feeItemId ?? null } });
       setStage({ kind: "waiting", paymentId: r.paymentId });
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.body?.paymentId) setStage({ kind: "waiting", paymentId: err.body.paymentId });
@@ -81,10 +83,18 @@ export function MpesaModal({ open, onClose, playerId, childName, amount: suggest
             <label className="label" htmlFor="mp-phone">Safaricom number</label>
             <input id="mp-phone" className="field text-lg" inputMode="tel" autoComplete="tel" placeholder="0712 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} required />
           </div>
-          <div>
-            <label className="label" htmlFor="mp-amount">Amount ({currency})</label>
-            <input id="mp-amount" className="field text-lg" inputMode="numeric" pattern="[0-9]*" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))} required />
-          </div>
+          {fixed ? (
+            <div className="rounded-xl bg-page p-3">
+              <p className="text-sm font-semibold text-slate">Amount due</p>
+              <p className="display text-[2rem] text-navy">{money(Number(amount || 0), currency)}</p>
+              <p className="text-xs text-slate">Set by Ambassadors Football. It can't be changed here.</p>
+            </div>
+          ) : (
+            <div>
+              <label className="label" htmlFor="mp-amount">Amount ({currency})</label>
+              <input id="mp-amount" className="field text-lg" inputMode="numeric" pattern="[0-9]*" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))} required />
+            </div>
+          )}
           {error && <Notice tone="bad">{error}</Notice>}
           <button className="btn-primary h-12 bg-[#1f8a3b] text-base hover:bg-[#1a7733]" disabled={busy || !amount}>
             {busy ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Smartphone className="h-5 w-5" />} Send prompt for {money(Number(amount || 0), currency)}

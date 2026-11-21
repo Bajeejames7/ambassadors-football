@@ -7,6 +7,8 @@ import { asset } from "../lib/base";
 import { useAuth, type Me } from "../lib/auth";
 import { NameInput, Notice } from "../components/ui";
 import { InstallApp } from "../components/InstallApp";
+import { IN_PARENT_PORTAL, PORTAL_PATH, STAFF_PATH } from "../lib/portal";
+import { RegisterChildButton } from "./Portal";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -18,8 +20,11 @@ function Shell({ children }: { children: React.ReactNode }) {
         </svg>
         <img src={asset("logo.jpg")} alt="" className="h-16 w-16 rounded-xl" />
         <h1 className="display mt-6 text-[3.3rem]">Football.<br />Faith.<br />Future.</h1>
-        <p className="mt-3 text-[15px] text-white/75">Ambassadors Football — for coaches, coordinators and parents.</p>
-        <div className="mt-8 rounded-[26px] bg-white p-5 text-ink">{children}</div>
+        <p className="mt-3 text-[15px] text-white/75">
+          {IN_PARENT_PORTAL ? "Parent portal: your child's sessions, progress, coach feedback and fees." : "Ambassadors Football for coaches and coordinators."}
+        </p>
+        {IN_PARENT_PORTAL && <div className="mt-6"><RegisterChildButton /></div>}
+        <div className="mt-6 rounded-[26px] bg-white p-5 text-ink">{children}</div>
         <div className="mt-4 text-ink"><InstallApp /></div>
         <p className="mt-6 text-center text-sm text-white/60">
           <Link to="/privacy" className="underline">Privacy policy</Link> · <Link to="/delete-account" className="underline">Delete an account</Link>
@@ -39,6 +44,7 @@ export function LoginPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [demo, setDemo] = useState<DemoInfo | null>(null);
+  const [door, setDoor] = useState<"" | "use_parent_portal" | "use_staff_login">("");
   useEffect(() => {
     api<DemoInfo>("/info").then(setDemo).catch(() => {});
   }, []);
@@ -46,11 +52,12 @@ export function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      const r = await api<{ token: string; me: Me }>("/auth/login", { method: "POST", body: { identifier: id, password: pw } });
+      const r = await api<{ token: string; me: Me }>("/auth/login", { method: "POST", body: { identifier: id, password: pw, portal: IN_PARENT_PORTAL ? "parents" : "staff" } });
       signIn(r.token, r.me);
       nav("/");
     } catch (err) {
       setError((err as Error).message);
+      setDoor((err as { body?: { code?: string } }).body?.code as typeof door ?? "");
     } finally {
       setBusy(false);
     }
@@ -60,19 +67,21 @@ export function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      const r = await api<{ token: string; me: Me }>("/auth/login", { method: "POST", body: { identifier, password } });
+      const r = await api<{ token: string; me: Me }>("/auth/login", { method: "POST", body: { identifier, password, portal: IN_PARENT_PORTAL ? "parents" : "staff" } });
       signIn(r.token, r.me);
       nav("/");
     } catch (err) {
       setError((err as Error).message);
+      setDoor((err as { body?: { code?: string } }).body?.code as typeof door ?? "");
     } finally {
       setBusy(false);
     }
   };
+  const accounts = (demo?.accounts ?? []).filter((a) => (a.role === "Parent") === IN_PARENT_PORTAL);
   return (
     <Shell>
       <form onSubmit={submit} className="grid gap-4">
-        <h2 className="condensed text-2xl text-navy">Sign in</h2>
+        <h2 className="condensed text-2xl text-navy">{IN_PARENT_PORTAL ? "Parent sign in" : "Staff sign in"}</h2>
         <div>
           <label className="label" htmlFor="id">Email or phone</label>
           <input id="id" className="field" autoComplete="username" value={identifier} onChange={(e) => setIdentifier(e.target.value)} required />
@@ -82,15 +91,22 @@ export function LoginPage() {
           <input id="pw" className="field" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
         </div>
         {error && <Notice tone="bad">{error}</Notice>}
+        {door === "use_parent_portal" && <a href={`${PORTAL_PATH}/`} className="btn-blue h-11">Open the parent portal</a>}
+        {door === "use_staff_login" && <a href={STAFF_PATH} className="btn-blue h-11">Open the staff sign-in</a>}
         <button className="btn-primary h-12" disabled={busy}>{busy && <LoaderCircle className="h-4 w-4 animate-spin" />} Sign in</button>
         <p className="text-center text-sm text-slate">New here? <Link to="/signup" className="font-semibold text-brand">Create an account</Link></p>
+        <p className="text-center text-sm text-slate">
+          {IN_PARENT_PORTAL
+            ? <>Coach or admin? <a href={STAFF_PATH} className="font-semibold text-brand">Staff sign-in</a></>
+            : <>Parent? <a href={`${PORTAL_PATH}/`} className="font-semibold text-brand">Open the parent portal</a></>}
+        </p>
       </form>
-      {demo?.demo && demo.accounts && (
+      {demo?.demo && accounts.length > 0 && (
         <div className="mt-5 border-t border-line pt-4">
           <p className="font-bold text-navy">Try the demo</p>
           <p className="text-sm text-slate">Sample data only. Sign in as:</p>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            {demo.accounts.map((a) => (
+          <div className={`mt-3 grid gap-2 ${accounts.length > 1 ? "grid-cols-2" : ""}`}>
+            {accounts.map((a) => (
               <button key={a.email} type="button" disabled={busy} onClick={() => signInAs(a.email, demo.password!)}
                 className="rounded-xl px-3 py-2.5 text-left ring-1 ring-line hover:bg-page disabled:opacity-50">
                 <span className="block text-[15px] font-bold text-navy">{a.role}</span>

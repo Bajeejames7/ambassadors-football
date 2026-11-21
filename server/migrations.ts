@@ -473,6 +473,57 @@ const migrations: { id: string; sql: string }[] = [
       CREATE INDEX unpaid_alerts_player_idx ON unpaid_alerts (player_id) WHERE resolved_at IS NULL;
     `,
   },
+  {
+    id: "004_restrictions_payment_config_terms",
+    sql: `
+      -- Admins have every Super Admin power unless a Super Admin switches
+      -- one off here (Privilege Control). A row = that power is revoked.
+      CREATE TABLE admin_restrictions (
+        user_id     int NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        restriction text NOT NULL,
+        created_by  int REFERENCES users(id) ON DELETE SET NULL,
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (user_id, restriction)
+      );
+
+      -- Payment details set by the Super Admin, per school/club. Parents see
+      -- exactly these and cannot change the amount.
+      CREATE TABLE payment_configs (
+        intramural_id      int PRIMARY KEY REFERENCES intramurals(id) ON DELETE CASCADE,
+        term_label         text NOT NULL DEFAULT '',
+        fee_amount         numeric(12, 2) CHECK (fee_amount IS NULL OR fee_amount > 0),
+        method             text NOT NULL DEFAULT 'paybill' CHECK (method IN ('paybill', 'till')),
+        paybill            text NOT NULL DEFAULT '',
+        till               text NOT NULL DEFAULT '',
+        account_ref_format text NOT NULL DEFAULT '{CODE}-{CHILD}',
+        deadline           date,
+        instructions       text NOT NULL DEFAULT '',
+        updated_by         int REFERENCES users(id) ON DELETE SET NULL,
+        updated_at         timestamptz NOT NULL DEFAULT now()
+      );
+
+      -- The term fee becomes one charge per child, once per term.
+      ALTER TABLE fee_items ADD COLUMN term_key text;
+      CREATE UNIQUE INDEX fee_items_term_uq ON fee_items (player_id, term_key) WHERE term_key IS NOT NULL;
+
+      -- App-wide settings (the "Register a Child" link).
+      CREATE TABLE app_settings (
+        key        text PRIMARY KEY,
+        value      text NOT NULL DEFAULT '',
+        updated_by int REFERENCES users(id) ON DELETE SET NULL,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      INSERT INTO app_settings (key, value)
+      SELECT 'registration_url', form_url FROM airtable_configs a JOIN intramurals i ON i.id = a.intramural_id
+       WHERE i.slug = 'rafiki' AND form_url <> '';
+
+      -- Term dates (used by Edit and the "Whole term" attendance graph).
+      ALTER TABLE intramurals ADD COLUMN term_start date, ADD COLUMN term_end date;
+
+      CREATE INDEX attendance_player_idx ON attendance (player_id);
+      CREATE INDEX sessions_date_only_idx ON sessions (date);
+    `,
+  },
 ];
 
 export async function migrate(): Promise<void> {

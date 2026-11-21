@@ -1,5 +1,6 @@
 import { idbSet } from "./idb";
 import { BASE } from "./base";
+import { getPreviewMe, previewToken, setPreviewMe } from "./portal";
 
 // Talking to the server. The sign-in token is kept in localStorage (so a coach
 // stays signed in) and mirrored into IndexedDB so the service worker can sync
@@ -9,10 +10,13 @@ const TOKEN_KEY = "af.token";
 const ME_KEY = "af.me";
 
 export function getToken(): string | null {
+  const preview = previewToken();
+  if (preview) return preview;
   try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
 }
 
 export function setToken(token: string | null): void {
+  if (previewToken()) return; // a preview tab never touches the real sign-in
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
     else localStorage.removeItem(TOKEN_KEY);
@@ -21,10 +25,12 @@ export function setToken(token: string | null): void {
 }
 
 export function getStoredMe<T>(): T | null {
+  if (previewToken()) return getPreviewMe<T>();
   try { return JSON.parse(localStorage.getItem(ME_KEY) ?? "null"); } catch { return null; }
 }
 
 export function setStoredMe(me: unknown): void {
+  if (previewToken()) { setPreviewMe(me); return; }
   try {
     if (me) localStorage.setItem(ME_KEY, JSON.stringify(me));
     else localStorage.removeItem(ME_KEY);

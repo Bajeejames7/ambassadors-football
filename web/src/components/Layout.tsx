@@ -9,6 +9,7 @@ import { InstallApp } from "./InstallApp";
 import { useLocation } from "react-router-dom";
 import type { CSSProperties } from "react";
 import { cssPhoto, photoForPath } from "../lib/photos";
+import { PreviewBanner } from "../pages/Portal";
 
 function navFor(role: string, isSuper: boolean) {
   if (role === "parent") {
@@ -61,6 +62,9 @@ export function Layout() {
       </aside>
 
       <div className="min-w-0">
+        {/* Full-page photo for this tab, behind everything, with a dark wash so cards stay easy to read. */}
+        <div aria-hidden className="page-photo" style={{ "--photo": `var(--tab-photo, ${cssPhoto(photoForPath(location.pathname, me!.role))})` } as CSSProperties} />
+        <PreviewBanner />
         {/* Mobile top bar */}
         <header className="sticky top-0 z-20 bg-navy text-white md:hidden" style={{ paddingTop: "env(safe-area-inset-top)" }}>
           <div className="flex h-14 items-center gap-3 px-4">
@@ -70,7 +74,7 @@ export function Layout() {
           <SyncBar />
         </header>
         <div className="hidden md:block"><SyncBar /></div>
-        <main className="mx-auto max-w-3xl px-4 pb-32 pt-6 md:pb-12" style={{ "--photo": cssPhoto(photoForPath(location.pathname, me!.role)) } as CSSProperties}>
+        <main className="on-photo mx-auto min-h-[calc(100vh-56px)] max-w-3xl px-4 pb-32 pt-6 md:pb-12" style={{ "--photo": cssPhoto(photoForPath(location.pathname, me!.role)) } as CSSProperties}>
           {location.pathname === "/" && <InstallApp variant="banner" />}
           {me!.role === "parent" ? <Parent3D><Outlet /></Parent3D> : <Outlet />}
         </main>

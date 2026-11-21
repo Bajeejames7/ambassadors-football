@@ -31,6 +31,8 @@ export interface Intramural {
   teams: { id: string; name: string; color: string }[];
   categories: string[];
   programMode: "school" | "club";
+  termStart?: string | null;
+  termEnd?: string | null;
   myAgeGroups?: string[];
   assigned?: boolean;
   countryId: number;

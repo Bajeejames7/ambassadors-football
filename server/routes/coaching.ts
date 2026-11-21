@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { HttpError, me, requirePermission, requirePlayer, requireSee, requireStaff } from "../auth.js";
 import { one, query } from "../db.js";
+import { ensureTermFees } from "../lib/termfees.js";
 import { isDate, today, addDays, weekdayOf } from "../util.js";
 import {
   addMentorshipLog, mentorshipInput, addTally, tallyInput, saveEquipmentCheck, equipmentInput, sessionReportInput, submitSessionReport,
@@ -47,6 +48,7 @@ coachingRoutes.post("/intramurals/:id/mentorship", async (req, res) => {
 
 coachingRoutes.get("/intramurals/:id/tally", async (req, res) => {
   const user = me(req);
+  requireStaff(user); // club-wide standings and player names are not for parents
   const id = Number(req.params.id);
   await requireSee(user, id);
   const intramural = await one(`SELECT CASE WHEN program_mode = 'school' THEN teams ELSE '[]'::jsonb END AS teams FROM intramurals WHERE id = $1`, [id]);
@@ -170,6 +172,7 @@ coachingRoutes.get("/parent/children", async (req, res) => {
     res.json({ pending: true, children: [] });
     return;
   }
+  await ensureTermFees(user.childIntramurals);
   const children = await query(
     `SELECT p.id, p.first_name AS "firstName", p.last_name AS "lastName", p.category, p.team,
             i.id AS "intramuralId", i.name AS "intramuralName", i.color, i.short_code AS "shortCode", i.logo,

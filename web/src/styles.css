@@ -50,3 +50,50 @@ body {
   background-size: cover;
   background-position: center 35%;
 }
+
+/* ---- Full-page photo behind every tab --------------------------------------------------
+ * A fixed layer (the phone-safe equivalent of background-attachment: fixed, which
+ * iOS ignores): the tab's photo fills the screen, cover + centre, under a dark
+ * wash. Cards stay white; text sitting straight on the photo turns light.
+ */
+.page-photo {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-color: var(--color-navy);
+  background-image:
+    linear-gradient(180deg, rgb(9 20 46 / 0.74) 0%, rgb(9 20 46 / 0.82) 45%, rgb(9 20 46 / 0.9) 100%),
+    var(--photo, none),
+    var(--hero-url, none);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+@media (min-width: 768px) {
+  .page-photo { left: 240px; }
+}
+
+/* Text sitting straight on the photo is light; cards, chips and dialogs reset to dark ink.
+   In the components layer so a colour utility on the same element still wins. */
+@layer components {
+  .on-photo { color: #fff; }
+  .on-photo :is(.sheet, .slab, dialog, .bg-white, .bg-page, .token, [class*="bg-white/"], [class*="bg-[#f"]) { color: var(--color-ink); }
+}
+/* Headings, notes and empty states that sit on the photo, not inside a card. */
+.on-photo :is(.text-navy, .text-ink):not(.bg-white, .bg-page, .token, [class*="bg-[#f"], .sheet, .slab, :is(.sheet, .slab, .bg-white, .bg-page, dialog, .token, [role="tablist"], [class*="bg-white/"], [class*="bg-[#f"]) *) {
+  color: #fff;
+}
+.on-photo :is(.text-slate):not(.bg-white, .bg-page, .token, .sheet, .slab, :is(.sheet, .slab, .bg-white, .bg-page, dialog, .token, [role="tablist"], [class*="bg-white/"], [class*="bg-[#f"]) *) {
+  color: rgb(255 255 255 / 0.78);
+}
+.on-photo .border-dashed.border-line:not(:is(.sheet, .slab, .bg-white) *) {
+  border-color: rgb(255 255 255 / 0.35);
+  background: rgb(255 255 255 / 0.06);
+}
+/* Portal headers become frosted glass over the page photo instead of a second photo. */
+.on-photo .photo-navy:not(.fixture) {
+  background-image: linear-gradient(135deg, rgb(15 33 71 / 0.86), rgb(15 33 71 / 0.5));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
+  backdrop-filter: blur(6px);
+}
+.on-photo [role="tablist"] > [aria-selected="true"] { box-shadow: 0 0 0 1.5px rgb(255 255 255 / 0.55); }
