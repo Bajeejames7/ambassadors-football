@@ -1,4 +1,5 @@
 import { getPool } from "./db.js";
+import { config } from "./config.js";
 
 /**
  * Database schema, applied in order at startup. Each migration runs once in a
@@ -420,6 +421,10 @@ const migrations: { id: string; sql: string }[] = [
 export async function migrate(): Promise<void> {
   const client = await getPool().connect();
   try {
+    if (config.dbSchema) {
+      await client.query(`CREATE SCHEMA IF NOT EXISTS "${config.dbSchema}"`);
+      await client.query(`SET search_path TO "${config.dbSchema}"`);
+    }
     await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
     await client.query("SELECT pg_advisory_lock(727272)");
     const done = new Set((await client.query<{ id: string }>("SELECT id FROM schema_migrations")).rows.map((r) => r.id));

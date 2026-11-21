@@ -1,7 +1,7 @@
 import { openDB, type IDBPDatabase } from "idb";
 
 /**
- * IndexedDB "ambassadors":
+ * IndexedDB "ambassadors-football":
  *   outbox — changes made offline, waiting to sync (keyPath id)
  *   failed — changes the server refused for good, shown to the coach
  *   cache  — the last copy of rosters, sessions and dashboards
@@ -11,7 +11,7 @@ import { openDB, type IDBPDatabase } from "idb";
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
 export function db(): Promise<IDBPDatabase> {
-  dbPromise ??= openDB("ambassadors", 1, {
+  dbPromise ??= openDB("ambassadors-football", 1, {
     upgrade(d) {
       if (!d.objectStoreNames.contains("outbox")) d.createObjectStore("outbox", { keyPath: "id" });
       if (!d.objectStoreNames.contains("failed")) d.createObjectStore("failed", { keyPath: "id" });

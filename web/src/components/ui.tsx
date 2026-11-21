@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { LoaderCircle, X } from "lucide-react";
 import type { Session } from "../lib/queries";
 import { relativeDay, shortDate, time12 } from "../lib/format";
+import { asset } from "../lib/base";
 
 export function Spinner({ label = "Loading…" }: { label?: string }) {
   return (
@@ -65,7 +66,7 @@ export function Crest({ i, size = 40 }: { i: { logo?: string; shortCode: string;
   if (i.logo) {
     return (
       <span className="grid shrink-0 place-items-center overflow-hidden rounded-lg bg-white p-0.5 ring-1 ring-line" style={style}>
-        <img src={`/${i.logo}`} alt="" className="h-full w-full object-contain" />
+        <img src={asset(i.logo)} alt="" className="h-full w-full object-contain" />
       </span>
     );
   }

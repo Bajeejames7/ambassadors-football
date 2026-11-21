@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { LoaderCircle } from "lucide-react";
 import { api } from "../lib/api";
+import { asset } from "../lib/base";
 import { useAuth, type Me } from "../lib/auth";
 import { NameInput, Notice } from "../components/ui";
 
@@ -13,7 +14,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           <circle cx="100" cy="100" r="70" fill="none" stroke="white" strokeWidth="3" />
           <line x1="100" y1="0" x2="100" y2="200" stroke="white" strokeWidth="3" />
         </svg>
-        <img src="/logo.jpg" alt="" className="h-16 w-16 rounded-xl" />
+        <img src={asset("logo.jpg")} alt="" className="h-16 w-16 rounded-xl" />
         <h1 className="display mt-6 text-[3.3rem]">Football.<br />Faith.<br />Future.</h1>
         <p className="mt-3 text-[15px] text-white/75">Ambassadors Football — for coaches, coordinators and parents.</p>
         <div className="mt-8 rounded-[26px] bg-white p-5 text-ink">{children}</div>
@@ -25,6 +26,8 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
+interface DemoInfo { demo: boolean; password?: string; accounts?: { role: string; email: string }[] }
+
 export function LoginPage() {
   const { signIn } = useAuth();
   const nav = useNavigate();
@@ -32,6 +35,23 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [demo, setDemo] = useState<DemoInfo | null>(null);
+  useEffect(() => {
+    api<DemoInfo>("/info").then(setDemo).catch(() => {});
+  }, []);
+  const signInAs = async (id: string, pw: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      const r = await api<{ token: string; me: Me }>("/auth/login", { method: "POST", body: { identifier: id, password: pw } });
+      signIn(r.token, r.me);
+      nav("/");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -62,6 +82,21 @@ export function LoginPage() {
         <button className="btn-primary h-12" disabled={busy}>{busy && <LoaderCircle className="h-4 w-4 animate-spin" />} Sign in</button>
         <p className="text-center text-sm text-slate">New here? <Link to="/signup" className="font-semibold text-brand">Create an account</Link></p>
       </form>
+      {demo?.demo && demo.accounts && (
+        <div className="mt-5 border-t border-line pt-4">
+          <p className="font-bold text-navy">Try the demo</p>
+          <p className="text-sm text-slate">Sample data only. Sign in as:</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {demo.accounts.map((a) => (
+              <button key={a.email} type="button" disabled={busy} onClick={() => signInAs(a.email, demo.password!)}
+                className="rounded-xl px-3 py-2.5 text-left ring-1 ring-line hover:bg-page disabled:opacity-50">
+                <span className="block text-[15px] font-bold text-navy">{a.role}</span>
+                <span className="block truncate text-xs text-slate">{a.email}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }

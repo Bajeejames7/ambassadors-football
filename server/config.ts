@@ -22,6 +22,10 @@ export interface Settings {
     mockDelayMs: number;
   };
   airtableApiKey: string;
+  /** Postgres schema for all tables ("" = the default). Lets the app share a database safely. */
+  dbSchema: string;
+  /** Demo mode: fills an empty database with demo people and shows one-tap demo sign-ins. */
+  demo: boolean;
 }
 
 function fromEnv(): Settings {
@@ -45,7 +49,16 @@ function fromEnv(): Settings {
       mockDelayMs: Number(env.MPESA_MOCK_DELAY_MS ?? 5000),
     },
     airtableApiKey: env.AIRTABLE_API_KEY ?? "",
+    dbSchema: env.DB_SCHEMA ?? "",
+    demo: env.DEMO_MODE === "1",
   };
 }
 
 export const config: Settings = fromEnv();
+
+/** Used when running inside another server (server/embed.ts): settings come from the host, not env. */
+export function configure(partial: Partial<Omit<Settings, "mpesa">> & { mpesa?: Partial<Settings["mpesa"]> }): void {
+  const { mpesa, ...rest } = partial;
+  Object.assign(config, Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)));
+  if (mpesa) Object.assign(config.mpesa, Object.fromEntries(Object.entries(mpesa).filter(([, v]) => v !== undefined)));
+}

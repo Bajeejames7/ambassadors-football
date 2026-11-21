@@ -21,7 +21,7 @@ const MUTED = "#5B6690";
 const LINE = "#DCE3F2";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const LOGO = [path.resolve(here, "../../web/public/logo.jpg"), path.resolve(here, "../../../web/public/logo.jpg"), path.resolve(here, "../web/logo.jpg"), path.resolve(here, "../../web/logo.jpg")].find(existsSync);
+const LOGO = [path.resolve(here, "../../web/public/logo.jpg"), path.resolve(here, "../../../web/public/logo.jpg"), path.resolve(here, "../web/logo.jpg"), path.resolve(here, "../../web/logo.jpg"), path.resolve(here, "web/logo.jpg")].find(existsSync);
 
 export async function gatherReport(sessionId: number) {
   const s = await one(

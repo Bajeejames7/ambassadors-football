@@ -7,6 +7,8 @@ import {
 import { one, query, transaction } from "../db.js";
 import { normalizeEmail, normalizePhone, titleCaseName } from "../util.js";
 import { notify, parentApprovers } from "../lib/notify.js";
+import { config } from "../config.js";
+import { DEMO_ACCOUNTS, DEMO_PASSWORD } from "../demo.js";
 
 /** Public routes (no sign-in): countries for onboarding, sign-up, sign-in. */
 export const publicAuthRoutes = Router();
@@ -14,6 +16,11 @@ export const publicAuthRoutes = Router();
 export const accountRoutes = Router();
 
 const password = z.string().min(8, "Use at least 8 characters for the password").max(200);
+
+/** What the sign-in screen needs to know: demo mode and its accounts. */
+publicAuthRoutes.get("/info", (_req, res) => {
+  res.json(config.demo ? { demo: true, password: DEMO_PASSWORD, accounts: DEMO_ACCOUNTS } : { demo: false });
+});
 
 publicAuthRoutes.get("/countries", async (_req, res) => {
   res.json(

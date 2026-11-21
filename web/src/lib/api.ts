@@ -1,4 +1,5 @@
 import { idbSet } from "./idb";
+import { BASE } from "./base";
 
 // Talking to the server. The sign-in token is kept in localStorage (so a coach
 // stays signed in) and mirrored into IndexedDB so the service worker can sync
@@ -52,7 +53,7 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   const token = getToken();
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, {
+    res = await fetch(`${BASE}api${path}`, {
       method: init.method ?? "GET",
       headers: {
         ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -75,7 +76,7 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
 
 /** Downloads a file (the PDF report) with the sign-in token. */
 export async function download(path: string, filename: string): Promise<void> {
-  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken()}` } });
+  const res = await fetch(`${BASE}api${path}`, { headers: { Authorization: `Bearer ${getToken()}` } });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new ApiError(res.status, body?.error ?? "Could not create the file", body);

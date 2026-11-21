@@ -1,5 +1,6 @@
 import { NavLink, Outlet, Link } from "react-router-dom";
 import { Bell, CalendarDays, ClipboardCheck, CloudOff, Home, RefreshCw, ShieldCheck, UserRound, Wallet } from "lucide-react";
+import { asset } from "../lib/base";
 import { useAuth } from "../lib/auth";
 import { useOffline } from "../lib/offline";
 import { useNotifications } from "../lib/queries";
@@ -35,7 +36,7 @@ export function Layout() {
       {/* Desktop sidebar */}
       <aside className="sticky top-0 hidden h-screen flex-col bg-navy p-5 text-white md:flex">
         <Link to="/" className="flex items-center gap-3">
-          <img src="/logo.jpg" alt="" className="h-11 w-11 rounded-lg" />
+          <img src={asset("logo.jpg")} alt="" className="h-11 w-11 rounded-lg" />
           <span className="display text-[1.35rem] leading-[0.9]">Ambassadors<br />Football</span>
         </Link>
         <nav className="mt-8 grid gap-1" aria-label="Main">
@@ -58,7 +59,7 @@ export function Layout() {
         {/* Mobile top bar */}
         <header className="sticky top-0 z-20 bg-navy text-white md:hidden" style={{ paddingTop: "env(safe-area-inset-top)" }}>
           <div className="flex h-14 items-center gap-3 px-4">
-            <img src="/logo.jpg" alt="Ambassadors Football" className="h-9 w-9 rounded-md" />
+            <img src={asset("logo.jpg")} alt="Ambassadors Football" className="h-9 w-9 rounded-md" />
             <span className="display flex-1 text-lg">Ambassadors Football</span>
           </div>
           <SyncBar />

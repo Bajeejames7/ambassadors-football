@@ -7,6 +7,8 @@
 const CACHE = "ambassadors-__BUILD__";
 const FILES = __FILES__;
 const SHELL = "index.html";
+// "/" on its own, "/ambassadors/" inside the Rafiki server.
+const SCOPE_PATH = new URL(self.registration.scope).pathname;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -39,7 +41,7 @@ self.addEventListener("fetch", (event) => {
     }
     return;
   }
-  if (url.pathname.startsWith("/api/") || url.pathname === "/sw.js") return; // data is cached by the app in IndexedDB
+  if (url.pathname.startsWith(`${SCOPE_PATH}api/`) || url.pathname === `${SCOPE_PATH}sw.js`) return; // data is cached by the app in IndexedDB
 
   if (request.mode === "navigate") {
     event.respondWith(
@@ -67,7 +69,7 @@ self.addEventListener("fetch", (event) => {
 
 function idb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open("ambassadors", 1);
+    const req = indexedDB.open("ambassadors-football", 1);
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
     // The app creates the stores; if they do not exist yet there is nothing to send.
@@ -96,7 +98,7 @@ async function flushFromWorker() {
   const ops = await tx(db, "outbox", "readonly", (s) => s.getAll());
   if (!token || !ops || ops.length === 0) return;
   ops.sort((a, b) => a.createdAt - b.createdAt);
-  const res = await fetch("/api/sync", {
+  const res = await fetch(`${SCOPE_PATH}api/sync`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ ops: ops.slice(0, 100).map((o) => ({ id: o.id, type: o.type, payload: o.payload })) }),

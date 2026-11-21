@@ -14,12 +14,23 @@ export function getPool(): pg.Pool {
   const url = new URL(config.databaseUrl);
   url.searchParams.delete("sslmode");
   const local = ["localhost", "127.0.0.1"].includes(url.hostname);
+  const schema = config.dbSchema;
+  if (schema && !/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error("DB_SCHEMA must be a simple lowercase name");
+  // A schema of our own needs a session-level search_path, which transaction
+  // poolers (Neon "-pooler" hosts, PgBouncer) drop; use the direct endpoint.
+  if (schema) url.hostname = url.hostname.replace("-pooler.", ".");
   shared = new pg.Pool({
     connectionString: url.toString(),
     ssl: local ? undefined : { rejectUnauthorized: false },
-    max: 8,
+    max: schema ? 4 : 8,
     connectionTimeoutMillis: 10000,
   });
+  if (schema) {
+    // Only our schema on the path: never read or write the host database's own tables.
+    shared.on("connect", (client) => {
+      client.query(`SET search_path TO "${schema}"`).catch(() => {});
+    });
+  }
   return shared;
 }
 
