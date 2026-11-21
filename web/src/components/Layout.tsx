@@ -7,6 +7,8 @@ import { useNotifications } from "../lib/queries";
 import { Parent3D } from "./Parent3D";
 import { InstallApp } from "./InstallApp";
 import { useLocation } from "react-router-dom";
+import type { CSSProperties } from "react";
+import { cssPhoto, photoForPath } from "../lib/photos";
 
 function navFor(role: string, isSuper: boolean) {
   if (role === "parent") {
@@ -68,7 +70,7 @@ export function Layout() {
           <SyncBar />
         </header>
         <div className="hidden md:block"><SyncBar /></div>
-        <main className="mx-auto max-w-3xl px-4 pb-32 pt-6 md:pb-12">
+        <main className="mx-auto max-w-3xl px-4 pb-32 pt-6 md:pb-12" style={{ "--photo": cssPhoto(photoForPath(location.pathname, me!.role)) } as CSSProperties}>
           {location.pathname === "/" && <InstallApp variant="banner" />}
           {me!.role === "parent" ? <Parent3D><Outlet /></Parent3D> : <Outlet />}
         </main>

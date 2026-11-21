@@ -71,7 +71,7 @@ export function SchedulePage() {
   for (const s of up.data!) byDate.set(s.date, [...(byDate.get(s.date) ?? []), s]);
   return (
     <>
-      <PageTitle title="Schedule" sub="The next five weeks. Times are local." />
+      <PageTitle banner title="Schedule" sub="The next five weeks. Times are local." />
       {byDate.size === 0 && <Empty>No sessions in the next five weeks.</Empty>}
       <div className="grid gap-5">
         {[...byDate].map(([date, list]) => (
@@ -373,7 +373,7 @@ export function FieldIndex() {
   const sessions = up.data!.filter((s) => !s.cancelled).slice(0, 8);
   return (
     <>
-      <PageTitle title="Field check-in" sub="Works without signal. Changes sync when you're back online." />
+      <PageTitle banner title="Field check-in" sub="Works without signal. Changes sync when you're back online." />
       {pending.length > 0 && <Link to="/field/queue" className="sheet mb-4 flex items-center justify-between font-semibold text-warn">{pending.length} change{pending.length === 1 ? "" : "s"} waiting to sync <PendingBadge /></Link>}
       {sessions.length === 0 ? <Empty>No sessions coming up.</Empty> : (
         <ul className="grid gap-3">

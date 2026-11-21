@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
+import { cssPhoto, photoForHubTab } from "../lib/photos";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Award, BookOpen, ChevronRight, Search } from "lucide-react";
@@ -37,7 +38,7 @@ export function IntramuralHub() {
   const current = (tabs.find((t) => t.id === tab)?.id ?? "sessions") as Tab;
   return (
     <>
-      <div className="photo-navy mb-5 flex items-center gap-3 rounded-[26px] px-4 pb-4 pt-8 text-white">
+      <div className="photo-navy mb-5 flex items-center gap-3 rounded-[26px] px-4 pb-4 pt-8 text-white" style={{ "--photo": cssPhoto(photoForHubTab(current, i.name)) } as CSSProperties}>
         <Crest i={i} size={52} />
         <div className="min-w-0">
           <h1 className="display truncate text-[2rem]">{i.name}</h1>
@@ -152,7 +153,7 @@ export function PlayerPage() {
   };
   return (
     <>
-      <PageTitle title={`${pl.firstName} ${pl.lastName}`} sub={[pl.intramuralName, pl.category, pl.team].filter(Boolean).join(" · ")} />
+      <PageTitle banner title={`${pl.firstName} ${pl.lastName}`} sub={[pl.intramuralName, pl.category, pl.team].filter(Boolean).join(" · ")} />
       {msg && <Notice tone="good">{msg}</Notice>}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="sheet">

@@ -45,7 +45,8 @@ body {
    --hero-url is set at start-up (main.tsx) so it follows the app's base path. */
 @utility photo-navy {
   background-color: var(--color-navy);
-  background-image: linear-gradient(135deg, rgba(15, 33, 71, 0.92), rgba(15, 33, 71, 0.78)), var(--hero-url, none);
+  /* Screen photo (set per page/tab as --photo), with the app's own photo underneath as a fallback. */
+  background-image: linear-gradient(135deg, rgba(15, 33, 71, 0.92), rgba(15, 33, 71, 0.78)), var(--photo, none), var(--hero-url, none);
   background-size: cover;
   background-position: center 35%;
 }

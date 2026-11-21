@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { cssPhoto } from "../lib/photos";
 import { Link, useNavigate } from "react-router-dom";
 import { LoaderCircle } from "lucide-react";
 import { api } from "../lib/api";
@@ -9,7 +10,7 @@ import { InstallApp } from "../components/InstallApp";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="photo-navy min-h-screen bg-fixed text-white">
+    <div className="photo-navy min-h-screen bg-fixed text-white" style={{ "--photo": cssPhoto("kidsPlaying") } as CSSProperties}>
       <div className="relative mx-auto flex min-h-screen max-w-md flex-col px-5 pb-10 pt-[calc(2.5rem+env(safe-area-inset-top))]">
         <svg className="pointer-events-none absolute -right-24 top-8 h-80 w-80 opacity-[0.08]" viewBox="0 0 200 200" aria-hidden>
           <circle cx="100" cy="100" r="70" fill="none" stroke="white" strokeWidth="3" />

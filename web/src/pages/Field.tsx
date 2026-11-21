@@ -34,7 +34,7 @@ export function FieldCheckIn() {
   ];
   return (
     <>
-      <PageTitle title="Field check-in" sub={<>{i.name} · {shortDate(s.date)} · {s.timeLabel}</>} action={<OfflineChip />} />
+      <PageTitle banner title="Field check-in" sub={<>{i.name} · {shortDate(s.date)} · {s.timeLabel}</>} action={<OfflineChip />} />
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
       {tab === "roll" && <RollCall sessionId={sessionId} intramuralId={i.id} canTake={perms.includes("attendance.take")} teams={i.teams} />}
       {tab === "walkin" && <WalkIn sessionId={sessionId} intramural={i} onDone={() => setTab("roll")} />}
@@ -410,7 +410,7 @@ export function QueuePage() {
   const { pending, failed, online, syncing } = useOffline();
   return (
     <>
-      <PageTitle title="Pending sync" sub={online ? "These changes are being sent now." : "You're offline. These changes are saved on this phone and send themselves when you're back online."}
+      <PageTitle banner title="Pending sync" sub={online ? "These changes are being sent now." : "You're offline. These changes are saved on this phone and send themselves when you're back online."}
         action={<button className="btn-ghost" onClick={() => void flush()} disabled={!online || syncing}><RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} /> Sync now</button>} />
       {pending.length === 0 ? <Empty>Everything is synced.</Empty> : (
         <ul className="sheet divide-y divide-line py-1">

@@ -83,7 +83,7 @@ export function ChildRoute() {
   if (!child) return <Navigate to="/" replace />;
   return (
     <>
-      <PageTitle title={`${child.firstName} ${child.lastName}`} />
+      <PageTitle banner title={`${child.firstName} ${child.lastName}`} />
       <ChildDashboard child={child} />
     </>
   );
@@ -300,7 +300,7 @@ export function FeesPage() {
     if (children.length === 1) return <Navigate to={`/child/${children[0].id}/fees`} replace />;
     return (
       <>
-        <PageTitle title="Fees" sub="Choose a child." />
+        <PageTitle banner title="Fees" sub="Choose a child." />
         {children.length === 0 ? <Empty>Fees appear once your children are linked to your account.</Empty> : (
           <ul className="grid gap-3">
             {children.map((c) => (
@@ -327,7 +327,7 @@ function Statement({ child }: { child: Child }) {
   return (
     <>
       <div className="rise">
-      <PageTitle title={`${child.firstName}'s fees`} sub={child.intramuralName} />
+      <PageTitle banner title={`${child.firstName}'s fees`} sub={child.intramuralName} />
       <div className="sheet">
         <p className="text-sm font-semibold text-slate">Balance</p>
         <p className={`display mt-1 text-[3rem] ${a.balance > 0 ? "extrude text-navy" : "extrude-good text-good"}`}>{money(a.balance, a.currency)}</p>

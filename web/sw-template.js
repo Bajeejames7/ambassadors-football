@@ -7,6 +7,7 @@
 const CACHE = "ambassadors-__BUILD__";
 const FILES = __FILES__;
 const SHELL = "index.html";
+const PHOTOS = "af-photos-v1";
 // "/" on its own, "/ambassadors/" inside the Rafiki server.
 const SCOPE_PATH = new URL(self.registration.scope).pathname;
 
@@ -31,6 +32,15 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) {
+    // Programme photos from the Ambassadors website: keep a copy once seen,
+    // in a cache that survives app updates, so backgrounds show offline.
+    if (url.hostname.endsWith("ambassadorsfootball.org") && url.pathname.includes("/wp-content/uploads/")) {
+      event.respondWith(caches.open(PHOTOS).then((c) => c.match(request).then((hit) => hit || fetch(request).then((res) => {
+        if (res.ok || res.type === "opaque") c.put(request, res.clone());
+        return res;
+      }))));
+      return;
+    }
     // Fonts: keep a copy once seen.
     if (url.hostname.endsWith("gstatic.com") || url.hostname.endsWith("googleapis.com")) {
       event.respondWith(caches.match(request).then((hit) => hit || fetch(request).then((res) => {

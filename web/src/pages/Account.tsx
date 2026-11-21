@@ -25,7 +25,7 @@ export function NotificationsPage() {
   };
   return (
     <>
-      <PageTitle title="Alerts" action={unread.length > 0 && (
+      <PageTitle banner title="Alerts" action={unread.length > 0 && (
         <button className="btn-ghost" onClick={async () => { await api("/notifications/read", { method: "POST", body: {} }); void qc.invalidateQueries({ queryKey: ["notifications"] }); }}>Mark all read</button>
       )} />
       {list.length === 0 ? <Empty>No alerts yet. Injuries, payments, schedule changes and awards show up here.</Empty> : (
@@ -81,7 +81,7 @@ export function AccountPage() {
   const grants = me!.grants.filter((g) => g.permission !== "country.override" || me!.role !== "parent");
   return (
     <>
-      <PageTitle title="Account" sub={`${me!.role === "super_admin" ? "Super Admin" : me!.role === "admin" ? "Admin" : me!.role === "coach" ? "Coach" : "Parent"} · ${me!.email}`} />
+      <PageTitle banner title="Account" sub={`${me!.role === "super_admin" ? "Super Admin" : me!.role === "admin" ? "Admin" : me!.role === "coach" ? "Coach" : "Parent"} · ${me!.email}`} />
       <form onSubmit={saveProfile} className="sheet grid gap-3">
         <div><label className="label" htmlFor="an">Name</label><NameInput id="an" value={name} onChange={setName} required /></div>
         <div><label className="label" htmlFor="ap">Phone</label><input id="ap" className="field" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
